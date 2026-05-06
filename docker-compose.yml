@@ -2,7 +2,7 @@ services:
   traefik:
     image: traefik:v3.7.0
     restart: unless-stopped
-    command: --providers.file.filename=/etc/traefik/dynamic/middlewares.yml
+    command: --providers.file.directory=/etc/traefik/dynamic --providers.file.watch=true
     env_file: .env
     ports: ["80:80","443:443"]
     volumes:
@@ -31,7 +31,7 @@ services:
       - "traefik.enable=true"
       # HTTP → HTTPS redirect handled by Traefik entryPoint redirect
       # HTTPS router for /api and /health
-      - "traefik.http.routers.api.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || Path(`/health`))"
+      - "traefik.http.routers.api.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/health`))"
       - "traefik.http.routers.api.entrypoints=websecure"
       - "traefik.http.routers.api.tls=true"
       - "traefik.http.routers.api.priority=10"
