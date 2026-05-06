@@ -46,6 +46,31 @@ def _submission_validate_certs_for_tcp(tcp_host: str) -> bool:
     return True
 
 
+def _outbound_relay_smtp_ready() -> bool:
+    """Host + AUTH credentials for SMTP_OUTBOUND_RELAY_* (e.g. Brevo)."""
+    h = (settings.smtp_outbound_relay_host or "").strip()
+    u = (settings.smtp_outbound_relay_user or "").strip()
+    p = (settings.smtp_outbound_relay_password or "").strip()
+    return bool(h and u and p)
+
+
+def _local_submission_ready() -> bool:
+    return bool((settings.smtp_submission_host or "").strip() and (settings.smtp_submission_user or "").strip())
+
+
+def _mail_test_from_addr() -> str:
+    return (settings.smtp_test_mail_from or "").strip() or settings.super_admin_email or ""
+
+
+def _mail_test_sends_via() -> str | None:
+    """Prefer outbound relay for the super-admin test when configured (avoids local :587 client/server deadlock/timeouts)."""
+    if _outbound_relay_smtp_ready():
+        return "outbound_relay"
+    if _local_submission_ready():
+        return "local_submission"
+    return None
+
+
 class SuperAdminStats(BaseModel):
     total_domains: int
     active_domains: int
@@ -125,8 +150,12 @@ class MailTestStatusResponse(BaseModel):
     # Actual TCP connect target (SMTP_SUBMISSION_CONNECT_HOST or SMTP_SUBMISSION_HOST).
     submission_tcp_target: str | None = None
     outbound_relay_configured: bool = False
+    outbound_relay_ready: bool = False
     outbound_relay_host: str | None = None
     outbound_relay_port: int | None = None
+    can_send_test_mail: bool = False
+    # outbound_relay preferred when both relay and local submission are configured.
+    mail_test_sends_via: str | None = None
 
 
 def _is_consumer_gmail(email: str) -> bool:
@@ -256,7 +285,10 @@ async def mail_test_status() -> MailTestStatusResponse:
     configured = bool(host and user)
     from_hint = (settings.smtp_test_mail_from or "").strip() or settings.super_admin_email
     relay_host = (settings.smtp_outbound_relay_host or "").strip()
+    relay_ready = _outbound_relay_smtp_ready()
     tcp_target = _submission_tcp_host() if configured else ""
+    route = _mail_test_sends_via()
+    from_ok = bool(_mail_test_from_addr())
     return MailTestStatusResponse(
         submission_configured=configured,
         host=host or None,
@@ -264,25 +296,17 @@ async def mail_test_status() -> MailTestStatusResponse:
         from_hint=from_hint or None,
         submission_tcp_target=tcp_target or None,
         outbound_relay_configured=bool(relay_host),
+        outbound_relay_ready=relay_ready,
         outbound_relay_host=relay_host or None,
         outbound_relay_port=int(settings.smtp_outbound_relay_port) if relay_host else None,
+        can_send_test_mail=bool(route) and from_ok,
+        mail_test_sends_via=route,
     )
 
 
 @router.post("/mail/test", response_model=TestMailResponse)
 async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
-    host = (settings.smtp_submission_host or "").strip()
-    user = (settings.smtp_submission_user or "").strip()
-    password = (settings.smtp_submission_password or "").strip() or "unused"
-    if not host or not user:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "SMTP submission is not configured. Set SMTP_SUBMISSION_HOST and SMTP_SUBMISSION_USER "
-                "on the server (see .env.example). Set SMTP_SUBMISSION_PASSWORD for external SMTP."
-            ),
-        )
-    mail_from = (settings.smtp_test_mail_from or "").strip() or settings.super_admin_email
+    mail_from = _mail_test_from_addr()
     if not mail_from:
         raise HTTPException(
             status_code=400,
@@ -294,6 +318,57 @@ async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
         "This is a test message sent from the Nex Mail super-admin panel.\n\n"
         "If you received it, authenticated SMTP submission (typically port 587) is working.\n"
     )
+
+    relay_h = (settings.smtp_outbound_relay_host or "").strip()
+    relay_user = (settings.smtp_outbound_relay_user or "").strip()
+    relay_pw = (settings.smtp_outbound_relay_password or "").strip()
+    relay_ready = bool(relay_h and relay_user and relay_pw)
+
+    host = (settings.smtp_submission_host or "").strip()
+    user = (settings.smtp_submission_user or "").strip()
+    password = (settings.smtp_submission_password or "").strip() or "unused"
+    local_ready = bool(host and user)
+
+    if not relay_ready and not local_ready:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Configure either full SMTP_OUTBOUND_RELAY_* (host, user, password) or "
+                "SMTP_SUBMISSION_HOST and SMTP_SUBMISSION_USER. See .env.example."
+            ),
+        )
+
+    # Prefer transactional relay for this test: same path as real outbound, no local aiosmtpd hop.
+    if relay_ready:
+        try:
+            await send_via_submission(
+                host=relay_h,
+                port=int(settings.smtp_outbound_relay_port),
+                username=relay_user,
+                password=relay_pw,
+                mail_from=mail_from,
+                mail_to=to_addr,
+                subject=subject,
+                body_text=body,
+                use_starttls=bool(settings.smtp_outbound_relay_use_tls),
+                validate_certs=True,
+            )
+        except SubmissionSMTPError as exc:
+            msg = str(exc)
+            logger.error(
+                "Super-admin mail test failed (outbound relay %s:%s mail_from=%s to=%s): %s",
+                relay_h,
+                settings.smtp_outbound_relay_port,
+                mail_from,
+                to_addr,
+                msg,
+            )
+            raise HTTPException(status_code=502, detail=msg) from exc
+        return TestMailResponse(
+            ok=True,
+            detail="Message sent via SMTP_OUTBOUND_RELAY_*. Check the recipient inbox (and Brevo logs if needed).",
+        )
+
     tcp = _submission_tcp_host()
     try:
         await send_via_submission(
@@ -322,7 +397,8 @@ async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
         if "timed out" in msg.lower():
             msg += (
                 " Common fix in Docker: set SMTP_SUBMISSION_CONNECT_HOST=127.0.0.1 when "
-                "SMTP_SUBMISSION_HOST is your public name (many hosts cannot hairpin to their own :587)."
+                "SMTP_SUBMISSION_HOST is your public name (many hosts cannot hairpin to their own :587). "
+                "Or set SMTP_OUTBOUND_RELAY_* so the test uses your provider directly."
             )
         raise HTTPException(status_code=502, detail=msg) from exc
     return TestMailResponse(

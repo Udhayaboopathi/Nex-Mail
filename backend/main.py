@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -13,6 +14,15 @@ from backend.imap.server import create_imap_server
 from backend.api.routers import auth, super_admin, domain_admin, mail, folders, threads, labels, rules, templates, contacts, calendar, tasks, notes, ai, pgp, campaigns, webhooks, api_keys, send_api, tracking, shared_mailboxes, delegation, spam_reports, ediscovery
 
 logger = logging.getLogger(__name__)
+
+# Ensure app loggers (e.g. super_admin mail-test errors) appear in `docker compose logs`.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s [%(name)s] %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
+logging.getLogger("backend").setLevel(logging.INFO)
 
 
 async def _init_db() -> None:

@@ -13,8 +13,11 @@ export default function SuperAdminSettings() {
     from_hint: string | null;
     submission_tcp_target: string | null;
     outbound_relay_configured: boolean;
+    outbound_relay_ready: boolean;
     outbound_relay_host: string | null;
     outbound_relay_port: number | null;
+    can_send_test_mail: boolean;
+    mail_test_sends_via: string | null;
   } | null>(null);
   const [to, setTo] = useState("");
   const [loadingStatus, setLoadingStatus] = useState(true);
@@ -84,18 +87,37 @@ export default function SuperAdminSettings() {
         </p>
         {loadingStatus ? (
           <p className="text-sm text-gray-500">Loading mail configuration…</p>
-        ) : status?.submission_configured ? (
+        ) : status?.can_send_test_mail ? (
           <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 px-3 py-2 text-sm text-emerald-800 dark:text-emerald-200 space-y-1">
-            <div>
-              Ready: <span className="font-mono">{status.host}:{status.port}</span>
-              {status.from_hint ? (
-                <>
-                  {" "}
-                  · From: <span className="font-mono">{status.from_hint}</span>
-                </>
-              ) : null}
-            </div>
-            {status.submission_tcp_target &&
+            {status.mail_test_sends_via === "outbound_relay" ? (
+              <div>
+                Super-admin test sends via <strong>outbound relay</strong>{" "}
+                <span className="font-mono">
+                  {status.outbound_relay_host}:{status.outbound_relay_port ?? 587}
+                </span>
+                {status.from_hint ? (
+                  <>
+                    {" "}
+                    · From: <span className="font-mono">{status.from_hint}</span>
+                  </>
+                ) : null}
+              </div>
+            ) : (
+              <div>
+                Super-admin test sends via <strong>local submission</strong>{" "}
+                <span className="font-mono">
+                  {status.host}:{status.port}
+                </span>
+                {status.from_hint ? (
+                  <>
+                    {" "}
+                    · From: <span className="font-mono">{status.from_hint}</span>
+                  </>
+                ) : null}
+              </div>
+            )}
+            {status.mail_test_sends_via === "local_submission" &&
+            status.submission_tcp_target &&
             status.host &&
             status.submission_tcp_target !== status.host ? (
               <div className="text-emerald-700 dark:text-emerald-300">
@@ -114,13 +136,11 @@ export default function SuperAdminSettings() {
           </div>
         ) : (
           <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
-            SMTP submission is not configured. On the server <code className="text-xs">.env</code> set at least{" "}
-            <code className="text-xs">SMTP_SUBMISSION_HOST</code> and <code className="text-xs">SMTP_SUBMISSION_USER</code>.
-            Add <code className="text-xs">SMTP_SUBMISSION_PASSWORD</code> for external SMTP (optional for self-hosted Nex Mail on :587).
-            Optional: <code className="text-xs">SMTP_TEST_MAIL_FROM</code>, <code className="text-xs">SMTP_SUBMISSION_PORT</code>,{" "}
-            <code className="text-xs">SMTP_SUBMISSION_USE_TLS</code>.             Use <code className="text-xs">SMTP_SUBMISSION_CONNECT_HOST=127.0.0.1</code> on Docker if the test times out. For blocked
-            outbound port 25, add <code className="text-xs">SMTP_OUTBOUND_RELAY_*</code>. Copy the same <code className="text-xs">.env</code>{" "}
-            to the VPS and{" "}
+            Cannot send a test email yet. On the server <code className="text-xs">.env</code> set either full{" "}
+            <code className="text-xs">SMTP_OUTBOUND_RELAY_*</code> (host, user, password — e.g. Brevo), or{" "}
+            <code className="text-xs">SMTP_SUBMISSION_HOST</code> and <code className="text-xs">SMTP_SUBMISSION_USER</code> for local
+            :587. Also set <code className="text-xs">SMTP_TEST_MAIL_FROM</code> or <code className="text-xs">SUPER_ADMIN_EMAIL</code>.
+            Copy the same <code className="text-xs">.env</code> to the VPS and{" "}
             <strong>restart the backend</strong> (<code className="text-xs">docker compose up -d --force-recreate backend</code>).
           </div>
         )}
@@ -138,7 +158,7 @@ export default function SuperAdminSettings() {
           <button
             type="button"
             onClick={handleSendTest}
-            disabled={sending || !status?.submission_configured}
+            disabled={sending || !status?.can_send_test_mail}
             className="px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {sending ? "Sending…" : "Send test email"}
