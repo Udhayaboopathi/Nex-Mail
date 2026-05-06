@@ -81,8 +81,15 @@ export const superAdminApi = {
   updateDomain: (id: string, data: Partial<Domain>) =>
     patch<Domain>(`/api/super-admin/domains/${id}`, data),
   deleteDomain: (id: string) => del(`/api/super-admin/domains/${id}`),
-  assignAdmin: (id: string, email: string) =>
-    post(`/api/super-admin/domains/${id}/assign-admin`, { email }),
+  assignAdmin: (
+    id: string,
+    body: { email: string; password: string; cloudflare_api_token: string }
+  ) =>
+    post<{
+      ok: boolean;
+      welcome_email_sent: boolean;
+      welcome_email_error: string | null;
+    }>(`/api/super-admin/domains/${id}/assign-admin`, body),
   suspendDomain: (id: string, reason: string) =>
     post(`/api/super-admin/domains/${id}/suspend`, { reason }),
   unsuspendDomain: (id: string) =>

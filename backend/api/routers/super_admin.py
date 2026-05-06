@@ -2,13 +2,17 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 
+from backend.config import settings
+from backend.core.encryption import encrypt_value
+from backend.core.security import hash_password
 from backend.database import AsyncSessionLocal
 from backend.models import BackupJob, Domain, Mailbox, User
 from backend.services.backup_service import create_full_backup
-from backend.services.domain_service import verify_dns
+from backend.services.domain_service import fetch_cloudflare_zone_id, verify_dns
+from backend.smtp.outbound import SMTPDeliveryError, send_direct
 
 router = APIRouter(tags=["super_admin"])
 
@@ -59,7 +63,20 @@ class SuspendDomainRequest(BaseModel):
 
 
 class AssignAdminRequest(BaseModel):
-    email: str
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=256)
+    cloudflare_api_token: str = Field(min_length=10, max_length=512)
+
+
+class AssignAdminResponse(BaseModel):
+    ok: bool = True
+    welcome_email_sent: bool = False
+    welcome_email_error: str | None = None
+
+
+def _is_consumer_gmail(email: str) -> bool:
+    addr = email.lower().strip()
+    return addr.endswith("@gmail.com") or addr.endswith("@googlemail.com")
 
 
 class BackupJobItem(BaseModel):
@@ -168,25 +185,72 @@ async def delete_domain(domain_id: str) -> dict[str, bool]:
     return {"ok": True}
 
 
-@router.post("/domains/{domain_id}/assign-admin")
-async def assign_admin(domain_id: str, payload: AssignAdminRequest) -> dict[str, bool]:
+@router.post("/domains/{domain_id}/assign-admin", response_model=AssignAdminResponse)
+async def assign_admin(domain_id: str, payload: AssignAdminRequest) -> AssignAdminResponse:
     try:
         domain_uuid = UUID(domain_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid domain id") from exc
+
+    email_norm = str(payload.email).lower().strip()
+    welcome_sent = False
+    welcome_err: str | None = None
 
     async with AsyncSessionLocal() as db:
         domain = (await db.execute(select(Domain).where(Domain.id == domain_uuid))).scalar_one_or_none()
         if domain is None:
             raise HTTPException(status_code=404, detail="Domain not found")
 
-        user = (await db.execute(select(User).where(User.email == payload.email.lower().strip()))).scalar_one_or_none()
+        user = (await db.execute(select(User).where(User.email == email_norm))).scalar_one_or_none()
         if user is None:
-            raise HTTPException(status_code=404, detail="User not found")
+            user = User(
+                email=email_norm,
+                hashed_password=hash_password(payload.password),
+                role="domain_admin",
+                is_active=True,
+            )
+            db.add(user)
+            await db.flush()
+        else:
+            user.hashed_password = hash_password(payload.password)
+            if user.role != "super_admin":
+                user.role = "domain_admin"
 
         domain.admin_user_id = user.id
+        domain.cloudflare_token_encrypted = encrypt_value(payload.cloudflare_api_token.strip())
+        zone_id = await fetch_cloudflare_zone_id(payload.cloudflare_api_token.strip(), domain.name)
+        if zone_id:
+            domain.cloudflare_zone_id = zone_id
+            domain.cloudflare_auto_dns = True
+
         await db.commit()
-    return {"ok": True}
+
+        domain_name = domain.name
+
+    # Send plaintext credentials only to Gmail / GoogleMail (explicit product choice).
+    if _is_consumer_gmail(email_norm):
+        login_url = str(settings.frontend_url).rstrip("/") + "/login"
+        subject = f"Domain admin access for {domain_name}"
+        body_text = (
+            f"You have been assigned as domain administrator for {domain_name}.\n\n"
+            f"Login URL: {login_url}\n"
+            f"Login ID (email): {email_norm}\n"
+            f"Password: {payload.password}\n\n"
+            "Please sign in and change your password after first login.\n"
+        )
+        from_addr = f"no-reply@{domain_name}"
+        try:
+            await send_direct(
+                from_addr=from_addr,
+                to_list=[email_norm],
+                subject=subject,
+                body_text=body_text,
+            )
+            welcome_sent = True
+        except (SMTPDeliveryError, Exception) as exc:
+            welcome_err = str(exc)
+
+    return AssignAdminResponse(ok=True, welcome_email_sent=welcome_sent, welcome_email_error=welcome_err)
 
 
 @router.post("/domains/{domain_id}/suspend")
