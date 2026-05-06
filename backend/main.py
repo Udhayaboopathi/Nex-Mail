@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from backend.api.middleware.rate_limit import add_rate_limiting
@@ -7,8 +8,25 @@ from backend.smtp.server import create_smtp_servers
 from backend.imap.server import create_imap_server
 from backend.api.routers import auth, super_admin, domain_admin, mail, folders, threads, labels, rules, templates, contacts, calendar, tasks, notes, ai, pgp, campaigns, webhooks, api_keys, send_api, tracking, shared_mailboxes, delegation, spam_reports, ediscovery
 
+logger = logging.getLogger(__name__)
+
+
+async def _init_db() -> None:
+    """Create all tables that don't yet exist (safe to run repeatedly)."""
+    try:
+        from backend.database import engine
+        from backend.models.base import Base
+        import backend.models.all_models  # noqa: F401 — registers all mapped classes
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database tables verified / created.")
+    except Exception as exc:
+        logger.error("DB init failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await _init_db()
     smtp25, smtp587 = await create_smtp_servers()
     imap_server = await create_imap_server()
     imap_task = asyncio.create_task(imap_server.serve_forever())

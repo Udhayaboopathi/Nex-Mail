@@ -13,3 +13,7 @@ def encrypt_text(value: str) -> str:
 
 def decrypt_text(value: str) -> str:
     return _fernet().decrypt(value.encode()).decode()
+
+# Aliases used by domain_service and other modules
+encrypt_value = encrypt_text
+decrypt_value = decrypt_text
