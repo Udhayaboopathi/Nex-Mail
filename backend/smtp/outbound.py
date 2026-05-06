@@ -8,6 +8,7 @@ import aiosmtplib
 import dns.resolver
 from sqlalchemy import select
 
+from backend.core.encryption import decrypt_value
 from backend.database import AsyncSessionLocal
 from backend.models import Domain, Mailbox, UnsubscribeList
 from backend.smtp.dkim import sign_message
@@ -35,7 +36,8 @@ async def _load_dkim_key(from_addr: str) -> tuple[str, bytes] | None:
         domain = domain_result.scalar_one_or_none()
         if domain is None or not domain.dkim_private_key_encrypted:
             return None
-        return (domain.dkim_selector, domain.dkim_private_key_encrypted.encode())
+        pem = decrypt_value(domain.dkim_private_key_encrypted)
+        return (domain.dkim_selector or "mail", pem.encode())
 
 
 def _build_message(from_addr: str, to_list: list[str], subject: str, body_text: str, body_html: str | None, attachments: list[dict] | None, headers: dict[str, str] | None) -> EmailMessage:

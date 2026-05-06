@@ -51,6 +51,8 @@ export function AssignAdminModal({ domainId, domainName, onClose, onAssigned }: 
         } else if (res.welcome_email_error) {
           toast(`Assigned, but email failed: ${res.welcome_email_error}`, "error");
         }
+      } else {
+        toast("No welcome email sent (only sent for Gmail). Share login URL and password securely.", "info");
       }
       onAssigned();
       onClose();
@@ -75,7 +77,8 @@ export function AssignAdminModal({ domainId, domainName, onClose, onAssigned }: 
             <UserCheck className="w-5 h-5 shrink-0" />
             <span>
               Set admin for <strong>{domainName}</strong>. The Cloudflare token is stored encrypted for DNS automation.
-              If the admin email is <strong>Gmail</strong>, login URL and password are emailed automatically.
+              Automated login email is sent only for <strong>@gmail.com</strong> / <strong>@googlemail.com</strong> addresses;
+              for other addresses, share credentials out of band.
             </span>
           </div>
           <div>
