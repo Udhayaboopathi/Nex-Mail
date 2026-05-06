@@ -215,6 +215,12 @@ class SubmissionHandler(InboundHandler):
                         mail_from,
                         remote_rcpts,
                     )
+                finally:
+                    logger.info(
+                        'Submission background relay task ended mail_from=%s recipients=%s',
+                        mail_from,
+                        remote_rcpts,
+                    )
 
             def _schedule() -> None:
                 task = loop.create_task(_relay_bg())

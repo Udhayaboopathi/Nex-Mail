@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import smtplib
 from email.message import EmailMessage
@@ -23,6 +24,16 @@ SMTP_CLIENT_TIMEOUT = 25.0
 
 class SMTPDeliveryError(Exception):
     """Raised when SMTP direct delivery fails for all recipients."""
+
+
+async def _resolve_mx_hosts(domain: str) -> list[tuple[int, str]]:
+    """MX lookup in a thread so the asyncio loop (FastAPI + aiosmtplib client) is not blocked."""
+
+    def _sync() -> list[tuple[int, str]]:
+        mx_records = dns.resolver.resolve(domain, 'MX')
+        return sorted([(r.preference, str(r.exchange).rstrip('.')) for r in mx_records], key=lambda x: x[0])
+
+    return await asyncio.to_thread(_sync)
 
 
 def _smtp_delivery_hint() -> str:
@@ -141,14 +152,20 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
 
         domain = recipient.split('@')[-1]
         try:
-            mx_records = dns.resolver.resolve(domain, 'MX')
-            mx_hosts = sorted([(r.preference, str(r.exchange).rstrip('.')) for r in mx_records], key=lambda x: x[0])
+            logger.info('send_direct MX lookup domain=%s recipient=%s', domain, recipient)
+            mx_hosts = await _resolve_mx_hosts(domain)
         except Exception as exc:
             raise SMTPDeliveryError(f'MX lookup failed for {recipient}: {exc}') from exc
 
         delivered = False
         for _, mx_host in mx_hosts:
             try:
+                logger.info(
+                    'send_direct trying MX mail_from=%s to=%s mx=%s:25',
+                    from_addr,
+                    recipient,
+                    mx_host,
+                )
                 await aiosmtplib.send(
                     raw,
                     sender=from_addr,
@@ -166,7 +183,8 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
                     mx_host,
                 )
                 break
-            except Exception:
+            except Exception as exc:
+                logger.info('send_direct MX try failed mx=%s to=%s: %s', mx_host, recipient, exc)
                 continue
 
         if not delivered and (settings.smtp_outbound_relay_host or '').strip():
@@ -189,7 +207,9 @@ async def relay_mx_raw(mail_from: str, recipients: list[str], raw: bytes) -> Non
     """
     if not recipients:
         return
+    logger.info('relay_mx_raw start mail_from=%s recipients=%s', mail_from, recipients)
     dkim_data = await _load_dkim_key(mail_from)
+    logger.info('relay_mx_raw after DKIM mail_from=%s signed=%s', mail_from, bool(dkim_data))
     out = raw
     if dkim_data:
         selector, private_key = dkim_data
@@ -209,14 +229,20 @@ async def relay_mx_raw(mail_from: str, recipients: list[str], raw: bytes) -> Non
             continue
         domain = recipient.split('@')[-1]
         try:
-            mx_records = dns.resolver.resolve(domain, 'MX')
-            mx_hosts = sorted([(r.preference, str(r.exchange).rstrip('.')) for r in mx_records], key=lambda x: x[0])
+            logger.info('relay_mx_raw MX lookup domain=%s recipient=%s', domain, recipient)
+            mx_hosts = await _resolve_mx_hosts(domain)
         except Exception as exc:
             raise SMTPDeliveryError(f'MX lookup failed for {recipient}: {exc}') from exc
 
         delivered = False
         for _, mx_host in mx_hosts:
             try:
+                logger.info(
+                    'relay_mx_raw trying MX mail_from=%s to=%s mx=%s:25',
+                    mail_from,
+                    recipient,
+                    mx_host,
+                )
                 await aiosmtplib.send(
                     out,
                     sender=mail_from,
@@ -234,7 +260,8 @@ async def relay_mx_raw(mail_from: str, recipients: list[str], raw: bytes) -> Non
                     mx_host,
                 )
                 break
-            except Exception:
+            except Exception as exc:
+                logger.info('relay_mx_raw MX try failed mx=%s to=%s: %s', mx_host, recipient, exc)
                 continue
 
         if not delivered and (settings.smtp_outbound_relay_host or '').strip():
