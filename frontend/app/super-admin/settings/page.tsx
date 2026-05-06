@@ -12,10 +12,6 @@ export default function SuperAdminSettings() {
     port: number | null;
     from_hint: string | null;
     submission_tcp_target: string | null;
-    outbound_relay_configured: boolean;
-    outbound_relay_ready: boolean;
-    outbound_relay_host: string | null;
-    outbound_relay_port: number | null;
     can_send_test_mail: boolean;
     mail_test_sends_via: string | null;
   } | null>(null);
@@ -77,43 +73,26 @@ export default function SuperAdminSettings() {
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Test outbound mail (SMTP submission)</h2>
         </div>
         <p className="text-sm text-gray-500 dark:text-gray-400">
-          The test uses <strong>your Nex Mail server first</strong> (<code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 rounded">SMTP_SUBMISSION_*</code>, port 587).
-          Outbound mail tries <strong>direct MX</strong> from your IP, then{" "}
-          <code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 rounded">SMTP_OUTBOUND_RELAY_*</code> only if that fails.
-          On Docker, set <code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 rounded">SMTP_SUBMISSION_CONNECT_HOST=127.0.0.1</code>{" "}
-          if submission to your public hostname times out.
+          The test submits to <strong>your Nex Mail server</strong> on port 587 (<code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 rounded">SMTP_SUBMISSION_*</code>).
+          External recipients are delivered via <strong>direct MX</strong> (TCP 25) from your server’s IP. On Docker, set{" "}
+          <code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 rounded">SMTP_SUBMISSION_CONNECT_HOST=127.0.0.1</code> if connecting to your public hostname times out.
         </p>
         {loadingStatus ? (
           <p className="text-sm text-gray-500">Loading mail configuration…</p>
         ) : status?.can_send_test_mail ? (
           <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 px-3 py-2 text-sm text-emerald-800 dark:text-emerald-200 space-y-1">
-            {status.mail_test_sends_via === "outbound_relay" ? (
-              <div>
-                Super-admin test sends via <strong>outbound relay</strong>{" "}
-                <span className="font-mono">
-                  {status.outbound_relay_host}:{status.outbound_relay_port ?? 587}
-                </span>
-                {status.from_hint ? (
-                  <>
-                    {" "}
-                    · From: <span className="font-mono">{status.from_hint}</span>
-                  </>
-                ) : null}
-              </div>
-            ) : (
-              <div>
-                Super-admin test sends via <strong>local submission</strong>{" "}
-                <span className="font-mono">
-                  {status.host}:{status.port}
-                </span>
-                {status.from_hint ? (
-                  <>
-                    {" "}
-                    · From: <span className="font-mono">{status.from_hint}</span>
-                  </>
-                ) : null}
-              </div>
-            )}
+            <div>
+              Super-admin test sends via <strong>local submission</strong>{" "}
+              <span className="font-mono">
+                {status.host}:{status.port}
+              </span>
+              {status.from_hint ? (
+                <>
+                  {" "}
+                  · From: <span className="font-mono">{status.from_hint}</span>
+                </>
+              ) : null}
+            </div>
             {status.mail_test_sends_via === "local_submission" &&
             status.submission_tcp_target &&
             status.host &&
@@ -123,22 +102,13 @@ export default function SuperAdminSettings() {
                 <span className="font-mono">{status.host}</span>)
               </div>
             ) : null}
-            {status.outbound_relay_ready && status.outbound_relay_host ? (
-              <div className="text-emerald-700 dark:text-emerald-300">
-                Smarthost fallback (after direct MX fails):{" "}
-                <span className="font-mono">
-                  {status.outbound_relay_host}:{status.outbound_relay_port ?? 587}
-                </span>
-              </div>
-            ) : null}
           </div>
         ) : (
           <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
-            Cannot send a test email yet. On the server <code className="text-xs">.env</code> set either full{" "}
-            <code className="text-xs">SMTP_OUTBOUND_RELAY_*</code> (host, user, password — e.g. Brevo), or{" "}
-            <code className="text-xs">SMTP_SUBMISSION_HOST</code> and <code className="text-xs">SMTP_SUBMISSION_USER</code> for local
-            :587. Also set <code className="text-xs">SMTP_TEST_MAIL_FROM</code> or <code className="text-xs">SUPER_ADMIN_EMAIL</code>.
-            Copy the same <code className="text-xs">.env</code> to the VPS and{" "}
+            Cannot send a test email yet. On the server <code className="text-xs">.env</code> set{" "}
+            <code className="text-xs">SMTP_SUBMISSION_HOST</code> and <code className="text-xs">SMTP_SUBMISSION_USER</code> for your
+            Nex Mail :587 endpoint, plus <code className="text-xs">SMTP_TEST_MAIL_FROM</code> or{" "}
+            <code className="text-xs">SUPER_ADMIN_EMAIL</code>. Copy the same <code className="text-xs">.env</code> to the VPS and{" "}
             <strong>restart the backend</strong> (<code className="text-xs">docker compose up -d --force-recreate backend</code>).
           </div>
         )}

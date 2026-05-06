@@ -21,7 +21,7 @@ from backend.services.domain_service import (
     fetch_cloudflare_zone_id,
     verify_dns,
 )
-from backend.smtp.outbound import SMTPDeliveryError, outbound_relay_uses_implicit_tls, send_direct
+from backend.smtp.outbound import SMTPDeliveryError, send_direct
 from backend.smtp.submission_send import SubmissionSMTPError, send_via_submission
 
 logger = logging.getLogger(__name__)
@@ -46,14 +46,6 @@ def _submission_validate_certs_for_tcp(tcp_host: str) -> bool:
     return True
 
 
-def _outbound_relay_smtp_ready() -> bool:
-    """Host + AUTH credentials for SMTP_OUTBOUND_RELAY_* (e.g. Brevo)."""
-    h = (settings.smtp_outbound_relay_host or "").strip()
-    u = (settings.smtp_outbound_relay_user or "").strip()
-    p = (settings.smtp_outbound_relay_password or "").strip()
-    return bool(h and u and p)
-
-
 def _local_submission_ready() -> bool:
     return bool((settings.smtp_submission_host or "").strip() and (settings.smtp_submission_user or "").strip())
 
@@ -63,48 +55,16 @@ def _mail_test_from_addr() -> str:
 
 
 def _mail_test_sends_via() -> str | None:
-    """Primary route for the super-admin test: own submission when configured, else relay-only."""
+    """Super-admin test uses authenticated submission to this Nex Mail instance when configured."""
     if _local_submission_ready():
         return "local_submission"
-    if _outbound_relay_smtp_ready():
-        return "outbound_relay"
     return None
-
-
-async def _send_via_outbound_relay_smarthost(
-    *,
-    mail_from: str,
-    mail_to: str,
-    subject: str,
-    body_text: str,
-) -> None:
-    """Send via SMTP_OUTBOUND_RELAY_* (Brevo, etc.) — used only as fallback when your own server path fails."""
-    relay_h = (settings.smtp_outbound_relay_host or "").strip()
-    relay_user = (settings.smtp_outbound_relay_user or "").strip()
-    relay_pw = (settings.smtp_outbound_relay_password or "").strip()
-    if not (relay_h and relay_user and relay_pw):
-        raise SubmissionSMTPError("SMTP_OUTBOUND_RELAY_* is not fully configured")
-    implicit = outbound_relay_uses_implicit_tls()
-    await send_via_submission(
-        host=relay_h,
-        port=int(settings.smtp_outbound_relay_port),
-        username=relay_user,
-        password=relay_pw,
-        mail_from=mail_from,
-        mail_to=mail_to,
-        subject=subject,
-        body_text=body_text,
-        use_starttls=bool(settings.smtp_outbound_relay_use_tls) and not implicit,
-        implicit_tls=implicit,
-        validate_certs=True,
-    )
 
 
 def _smtp_connect_timeout_hint() -> str:
     return (
-        " Outbound SMTP may be blocked (587 is often filtered). Try SMTP_OUTBOUND_RELAY_PORT=2525 with Brevo, "
-        "or port 465 with SMTP_OUTBOUND_RELAY_IMPLICIT_TLS=true (465 enables implicit TLS automatically). "
-        "Test from the VPS: nc -zv smtp-relay.brevo.com 587 && nc -zv smtp-relay.brevo.com 2525 && nc -zv smtp-relay.brevo.com 465"
+        " Check from the server: outbound TCP 25 to the recipient’s MX (e.g. `nc -zv gmail-smtp-in.l.google.com 25`). "
+        "If submission to :587 times out from Docker, set SMTP_SUBMISSION_CONNECT_HOST=127.0.0.1."
     )
 
 
@@ -186,12 +146,7 @@ class MailTestStatusResponse(BaseModel):
     from_hint: str | None = None
     # Actual TCP connect target (SMTP_SUBMISSION_CONNECT_HOST or SMTP_SUBMISSION_HOST).
     submission_tcp_target: str | None = None
-    outbound_relay_configured: bool = False
-    outbound_relay_ready: bool = False
-    outbound_relay_host: str | None = None
-    outbound_relay_port: int | None = None
     can_send_test_mail: bool = False
-    # outbound_relay preferred when both relay and local submission are configured.
     mail_test_sends_via: str | None = None
 
 
@@ -255,28 +210,6 @@ async def _send_assign_welcome_email(
             )
             logger.info("Assign-admin welcome email for %s delivered via SMTP submission (%s)", email_norm, sub_host)
         except SubmissionSMTPError as sub_exc:
-            if _outbound_relay_smtp_ready():
-                try:
-                    await _send_via_outbound_relay_smarthost(
-                        mail_from=mail_from,
-                        mail_to=email_norm,
-                        subject=subject,
-                        body_text=body_text,
-                    )
-                    logger.info(
-                        "Assign-admin welcome email for %s delivered via SMTP_OUTBOUND_RELAY fallback (after MX + local submission failed)",
-                        email_norm,
-                    )
-                    return
-                except SubmissionSMTPError as relay_exc:
-                    logger.warning(
-                        "Assign-admin welcome email failed for %s (direct MX: %s; submission: %s; relay: %s)",
-                        email_norm,
-                        direct_exc,
-                        sub_exc,
-                        relay_exc,
-                    )
-                    return
             logger.warning(
                 "Assign-admin welcome email failed for %s (direct MX: %s; submission: %s)",
                 email_norm,
@@ -343,8 +276,6 @@ async def mail_test_status() -> MailTestStatusResponse:
     # Password optional for self-hosted Nex Mail (port 587 stub-auth). Required for real external SMTP.
     configured = bool(host and user)
     from_hint = (settings.smtp_test_mail_from or "").strip() or settings.super_admin_email
-    relay_host = (settings.smtp_outbound_relay_host or "").strip()
-    relay_ready = _outbound_relay_smtp_ready()
     tcp_target = _submission_tcp_host() if configured else ""
     route = _mail_test_sends_via()
     from_ok = bool(_mail_test_from_addr())
@@ -354,10 +285,6 @@ async def mail_test_status() -> MailTestStatusResponse:
         port=settings.smtp_submission_port,
         from_hint=from_hint or None,
         submission_tcp_target=tcp_target or None,
-        outbound_relay_configured=bool(relay_host),
-        outbound_relay_ready=relay_ready,
-        outbound_relay_host=relay_host or None,
-        outbound_relay_port=int(settings.smtp_outbound_relay_port) if relay_host else None,
         can_send_test_mail=bool(route) and from_ok,
         mail_test_sends_via=route,
     )
@@ -378,116 +305,53 @@ async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
         "If you received it, authenticated SMTP submission (typically port 587) is working.\n"
     )
 
-    relay_h = (settings.smtp_outbound_relay_host or "").strip()
-    relay_user = (settings.smtp_outbound_relay_user or "").strip()
-    relay_pw = (settings.smtp_outbound_relay_password or "").strip()
-    relay_ready = bool(relay_h and relay_user and relay_pw)
-
     host = (settings.smtp_submission_host or "").strip()
     user = (settings.smtp_submission_user or "").strip()
     password = (settings.smtp_submission_password or "").strip() or "unused"
     local_ready = bool(host and user)
 
-    if not relay_ready and not local_ready:
+    if not local_ready:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Configure SMTP_SUBMISSION_HOST + SMTP_SUBMISSION_USER for your own server, and/or full "
-                "SMTP_OUTBOUND_RELAY_* as fallback. See .env.example."
-            ),
+            detail="Configure SMTP_SUBMISSION_HOST and SMTP_SUBMISSION_USER for your Nex Mail server. See .env.example.",
         )
 
-    if local_ready:
-        tcp = _submission_tcp_host()
-        try:
-            await send_via_submission(
-                host=tcp,
-                port=int(settings.smtp_submission_port),
-                username=user,
-                password=password,
-                mail_from=mail_from,
-                mail_to=to_addr,
-                subject=subject,
-                body_text=body,
-                use_starttls=bool(settings.smtp_submission_use_tls),
-                validate_certs=_submission_validate_certs_for_tcp(tcp),
-            )
-        except SubmissionSMTPError as local_exc:
-            msg_local = str(local_exc)
-            logger.warning(
-                "Super-admin mail test: local submission failed tcp=%s:%s mail_from=%s to=%s: %s",
-                tcp,
-                settings.smtp_submission_port,
-                mail_from,
-                to_addr,
-                msg_local,
-            )
-            if relay_ready:
-                try:
-                    await _send_via_outbound_relay_smarthost(
-                        mail_from=mail_from,
-                        mail_to=to_addr,
-                        subject=subject,
-                        body_text=body,
-                    )
-                except SubmissionSMTPError as relay_exc:
-                    msg_r = str(relay_exc)
-                    logger.error(
-                        "Super-admin mail test: relay fallback also failed mail_from=%s to=%s: %s",
-                        mail_from,
-                        to_addr,
-                        msg_r,
-                    )
-                    combined = f"Your server submission failed: {msg_local}. SMTP_OUTBOUND_RELAY_* fallback failed: {msg_r}."
-                    if "Timed out connecting" in msg_r or "SMTPConnectTimeoutError" in msg_r:
-                        combined += _smtp_connect_timeout_hint()
-                    raise HTTPException(status_code=502, detail=combined) from relay_exc
-                return TestMailResponse(
-                    ok=True,
-                    detail=(
-                        "Your Nex Mail submission failed, so this test used SMTP_OUTBOUND_RELAY_* fallback. "
-                        "Fix local :587 if you want all mail to go through your server first."
-                    ),
-                )
-            if "timed out" in msg_local.lower():
-                msg_local += (
-                    " Common fix in Docker: SMTP_SUBMISSION_CONNECT_HOST=127.0.0.1. "
-                    "Optional: set SMTP_OUTBOUND_RELAY_* for a fallback smarthost."
-                )
-            raise HTTPException(status_code=502, detail=msg_local) from local_exc
-        detail = (
-            "Message accepted on your Nex Mail server (:587). External delivery tries direct MX from your IP first; "
-        )
-        detail += (
-            "SMTP_OUTBOUND_RELAY_* is used only if that fails (blocked port 25, blacklists, etc.)."
-            if relay_ready
-            else "Configure SMTP_OUTBOUND_RELAY_* for a smarthost fallback after direct MX fails."
-        )
-        return TestMailResponse(ok=True, detail=detail)
-
+    tcp = _submission_tcp_host()
     try:
-        await _send_via_outbound_relay_smarthost(
+        await send_via_submission(
+            host=tcp,
+            port=int(settings.smtp_submission_port),
+            username=user,
+            password=password,
             mail_from=mail_from,
             mail_to=to_addr,
             subject=subject,
             body_text=body,
+            use_starttls=bool(settings.smtp_submission_use_tls),
+            validate_certs=_submission_validate_certs_for_tcp(tcp),
         )
-    except SubmissionSMTPError as exc:
-        msg = str(exc)
-        logger.error(
-            "Super-admin mail test failed (relay-only %s:%s mail_from=%s to=%s): %s",
-            relay_h,
-            settings.smtp_outbound_relay_port,
+    except SubmissionSMTPError as local_exc:
+        msg_local = str(local_exc)
+        logger.warning(
+            "Super-admin mail test: local submission failed tcp=%s:%s mail_from=%s to=%s: %s",
+            tcp,
+            settings.smtp_submission_port,
             mail_from,
             to_addr,
-            msg,
+            msg_local,
         )
-        if "Timed out connecting" in msg or "SMTPConnectTimeoutError" in msg:
-            msg += _smtp_connect_timeout_hint()
-        raise HTTPException(status_code=502, detail=msg) from exc
+        if "timed out" in msg_local.lower() or "SMTPConnectTimeoutError" in msg_local:
+            msg_local += (
+                " Common fix in Docker: SMTP_SUBMISSION_CONNECT_HOST=127.0.0.1."
+            )
+            msg_local += _smtp_connect_timeout_hint()
+        raise HTTPException(status_code=502, detail=msg_local) from local_exc
     return TestMailResponse(
         ok=True,
-        detail="Message sent via SMTP_OUTBOUND_RELAY_* only (local submission not configured). Prefer SMTP_SUBMISSION_* to use your own server first.",
+        detail=(
+            "Message accepted on your Nex Mail server (:587). Delivery to external addresses uses direct MX (TCP 25) "
+            "from this host; ensure your provider allows outbound port 25 and DNS (SPF/DKIM/DMARC, PTR) is correct."
+        ),
     )
 
 

@@ -190,7 +190,7 @@ class SubmissionHandler(InboundHandler):
                 return err
 
         if remote_rcpts:
-            # Do not await relay: aiosmtplib (and the HTTP mail-test client) would block until MX/smarthost
+            # Do not await relay: aiosmtplib (and the HTTP mail-test client) would block until MX
             # delivery finishes, often exceeding client timeouts when :25 is slow or blocked.
             from backend.runtime import get_main_loop
             from backend.smtp.outbound import SMTPDeliveryError, relay_mx_raw

@@ -35,16 +35,6 @@ class Settings(BaseSettings):
     smtp_submission_connect_host: str = ""
     smtp_submission_tls_insecure: bool = False  # If True, skip TLS cert verification (e.g. IP vs cert name).
     smtp_test_mail_from: str = ""
-    # Optional smarthost (e.g. Brevo) used only after direct MX :25 delivery fails — not the primary path.
-    smtp_outbound_relay_host: str = ""
-    smtp_outbound_relay_port: int = 587
-    smtp_outbound_relay_user: str = ""
-    smtp_outbound_relay_password: str = ""
-    smtp_outbound_relay_use_tls: bool = True
-    # Port 465 uses implicit TLS (SMTPS). Set True if you use 465 or a host that requires SSL from connect.
-    smtp_outbound_relay_implicit_tls: bool = False
-    # Many VPS providers block outbound TCP 25. Set true to skip direct MX and use SMTP_OUTBOUND_RELAY_* only (when configured).
-    smtp_outbound_skip_direct_mx: bool = False
     # When False, FastAPI skips Base.metadata.create_all on startup (use with Alembic).
     metadata_create_all_on_startup: bool = True
 

@@ -95,10 +95,6 @@ export const superAdminApi = {
       port: number | null;
       from_hint: string | null;
       submission_tcp_target: string | null;
-      outbound_relay_configured: boolean;
-      outbound_relay_ready: boolean;
-      outbound_relay_host: string | null;
-      outbound_relay_port: number | null;
       can_send_test_mail: boolean;
       mail_test_sends_via: string | null;
     }>("/api/super-admin/mail/test-status"),
