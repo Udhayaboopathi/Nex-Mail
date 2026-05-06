@@ -88,11 +88,12 @@ export default function SuperAdminSettings() {
           </div>
         ) : (
           <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
-            SMTP submission is not configured. Add to server <code className="text-xs">.env</code>:{" "}
-            <code className="text-xs">SMTP_SUBMISSION_HOST</code>, <code className="text-xs">SMTP_SUBMISSION_USER</code>,{" "}
-            <code className="text-xs">SMTP_SUBMISSION_PASSWORD</code>. Optional:{" "}
-            <code className="text-xs">SMTP_TEST_MAIL_FROM</code>, <code className="text-xs">SMTP_SUBMISSION_PORT</code>,{" "}
-            <code className="text-xs">SMTP_SUBMISSION_USE_TLS</code>. Restart the backend after changes.
+            SMTP submission is not configured. On the server <code className="text-xs">.env</code> set at least{" "}
+            <code className="text-xs">SMTP_SUBMISSION_HOST</code> and <code className="text-xs">SMTP_SUBMISSION_USER</code>.
+            Add <code className="text-xs">SMTP_SUBMISSION_PASSWORD</code> for external SMTP (optional for self-hosted Nex Mail on :587).
+            Optional: <code className="text-xs">SMTP_TEST_MAIL_FROM</code>, <code className="text-xs">SMTP_SUBMISSION_PORT</code>,{" "}
+            <code className="text-xs">SMTP_SUBMISSION_USE_TLS</code>. Copy the same <code className="text-xs">.env</code> to the VPS and{" "}
+            <strong>restart the backend</strong> (<code className="text-xs">docker compose up -d --force-recreate backend</code>).
           </div>
         )}
         <div className="flex flex-col sm:flex-row gap-3 sm:items-end">

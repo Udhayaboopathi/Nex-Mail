@@ -193,8 +193,8 @@ async def get_stats() -> SuperAdminStats:
 async def mail_test_status() -> MailTestStatusResponse:
     host = (settings.smtp_submission_host or "").strip()
     user = (settings.smtp_submission_user or "").strip()
-    has_pw = bool(settings.smtp_submission_password)
-    configured = bool(host and user and has_pw)
+    # Password optional for self-hosted Nex Mail (port 587 stub-auth). Required for real external SMTP.
+    configured = bool(host and user)
     from_hint = (settings.smtp_test_mail_from or "").strip() or settings.super_admin_email
     return MailTestStatusResponse(
         submission_configured=configured,
@@ -208,13 +208,13 @@ async def mail_test_status() -> MailTestStatusResponse:
 async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
     host = (settings.smtp_submission_host or "").strip()
     user = (settings.smtp_submission_user or "").strip()
-    password = settings.smtp_submission_password
-    if not host or not user or not password:
+    password = (settings.smtp_submission_password or "").strip() or "unused"
+    if not host or not user:
         raise HTTPException(
             status_code=400,
             detail=(
-                "SMTP submission is not configured. Set SMTP_SUBMISSION_HOST, SMTP_SUBMISSION_USER, "
-                "and SMTP_SUBMISSION_PASSWORD on the server (see .env.example)."
+                "SMTP submission is not configured. Set SMTP_SUBMISSION_HOST and SMTP_SUBMISSION_USER "
+                "on the server (see .env.example). Set SMTP_SUBMISSION_PASSWORD for external SMTP."
             ),
         )
     mail_from = (settings.smtp_test_mail_from or "").strip() or settings.super_admin_email
