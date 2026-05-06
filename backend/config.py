@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     smtp_outbound_relay_use_tls: bool = True
     # Port 465 uses implicit TLS (SMTPS). Set True if you use 465 or a host that requires SSL from connect.
     smtp_outbound_relay_implicit_tls: bool = False
+    # Many VPS providers block outbound TCP 25. Set true to skip direct MX and use SMTP_OUTBOUND_RELAY_* only (when configured).
+    smtp_outbound_skip_direct_mx: bool = False
     # When False, FastAPI skips Base.metadata.create_all on startup (use with Alembic).
     metadata_create_all_on_startup: bool = True
 

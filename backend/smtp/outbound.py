@@ -40,9 +40,13 @@ def _smtp_delivery_hint() -> str:
     if (settings.smtp_outbound_relay_host or '').strip():
         return ' Direct MX was exhausted; check SMTP_OUTBOUND_RELAY_* credentials and provider logs if smarthost also failed.'
     return (
-        ' Many hosts block outbound TCP 25. Set SMTP_OUTBOUND_RELAY_HOST (and user/password) as a fallback smarthost '
-        'after direct MX fails.'
+        ' Outbound TCP 25 is often blocked by VPS providers (timeouts to Gmail MX). Set SMTP_OUTBOUND_SKIP_DIRECT_MX=true '
+        'and SMTP_OUTBOUND_RELAY_* (e.g. Brevo on port 2525/587), or ask your provider to allow outbound 25.'
     )
+
+
+def _try_direct_mx() -> bool:
+    return not bool(getattr(settings, 'smtp_outbound_skip_direct_mx', False))
 
 
 def outbound_relay_uses_implicit_tls() -> bool:
@@ -151,41 +155,47 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
             continue
 
         domain = recipient.split('@')[-1]
-        try:
-            logger.info('send_direct MX lookup domain=%s recipient=%s', domain, recipient)
-            mx_hosts = await _resolve_mx_hosts(domain)
-        except Exception as exc:
-            raise SMTPDeliveryError(f'MX lookup failed for {recipient}: {exc}') from exc
-
         delivered = False
-        for _, mx_host in mx_hosts:
+        if _try_direct_mx():
             try:
-                logger.info(
-                    'send_direct trying MX mail_from=%s to=%s mx=%s:25',
-                    from_addr,
-                    recipient,
-                    mx_host,
-                )
-                await aiosmtplib.send(
-                    raw,
-                    sender=from_addr,
-                    recipients=[recipient],
-                    hostname=mx_host,
-                    port=25,
-                    start_tls=True,
-                    timeout=SMTP_CLIENT_TIMEOUT,
-                )
-                delivered = True
-                logger.info(
-                    'Outbound delivered via direct MX mail_from=%s to=%s mx=%s',
-                    from_addr,
-                    recipient,
-                    mx_host,
-                )
-                break
+                logger.info('send_direct MX lookup domain=%s recipient=%s', domain, recipient)
+                mx_hosts = await _resolve_mx_hosts(domain)
             except Exception as exc:
-                logger.info('send_direct MX try failed mx=%s to=%s: %s', mx_host, recipient, exc)
-                continue
+                raise SMTPDeliveryError(f'MX lookup failed for {recipient}: {exc}') from exc
+
+            for _, mx_host in mx_hosts:
+                try:
+                    logger.info(
+                        'send_direct trying MX mail_from=%s to=%s mx=%s:25',
+                        from_addr,
+                        recipient,
+                        mx_host,
+                    )
+                    await aiosmtplib.send(
+                        raw,
+                        sender=from_addr,
+                        recipients=[recipient],
+                        hostname=mx_host,
+                        port=25,
+                        start_tls=True,
+                        timeout=SMTP_CLIENT_TIMEOUT,
+                    )
+                    delivered = True
+                    logger.info(
+                        'Outbound delivered via direct MX mail_from=%s to=%s mx=%s',
+                        from_addr,
+                        recipient,
+                        mx_host,
+                    )
+                    break
+                except Exception as exc:
+                    logger.info('send_direct MX try failed mx=%s to=%s: %s', mx_host, recipient, exc)
+                    continue
+        else:
+            logger.info(
+                'send_direct skipping direct MX (SMTP_OUTBOUND_SKIP_DIRECT_MX=true) recipient=%s',
+                recipient,
+            )
 
         if not delivered and (settings.smtp_outbound_relay_host or '').strip():
             logger.info('Direct MX failed for %s; trying smarthost for mail_from=%s', recipient, from_addr)
@@ -228,41 +238,47 @@ async def relay_mx_raw(mail_from: str, recipients: list[str], raw: bytes) -> Non
             failed.append(recipient)
             continue
         domain = recipient.split('@')[-1]
-        try:
-            logger.info('relay_mx_raw MX lookup domain=%s recipient=%s', domain, recipient)
-            mx_hosts = await _resolve_mx_hosts(domain)
-        except Exception as exc:
-            raise SMTPDeliveryError(f'MX lookup failed for {recipient}: {exc}') from exc
-
         delivered = False
-        for _, mx_host in mx_hosts:
+        if _try_direct_mx():
             try:
-                logger.info(
-                    'relay_mx_raw trying MX mail_from=%s to=%s mx=%s:25',
-                    mail_from,
-                    recipient,
-                    mx_host,
-                )
-                await aiosmtplib.send(
-                    out,
-                    sender=mail_from,
-                    recipients=[recipient],
-                    hostname=mx_host,
-                    port=25,
-                    start_tls=True,
-                    timeout=SMTP_CLIENT_TIMEOUT,
-                )
-                delivered = True
-                logger.info(
-                    'Outbound delivered via direct MX mail_from=%s to=%s mx=%s',
-                    mail_from,
-                    recipient,
-                    mx_host,
-                )
-                break
+                logger.info('relay_mx_raw MX lookup domain=%s recipient=%s', domain, recipient)
+                mx_hosts = await _resolve_mx_hosts(domain)
             except Exception as exc:
-                logger.info('relay_mx_raw MX try failed mx=%s to=%s: %s', mx_host, recipient, exc)
-                continue
+                raise SMTPDeliveryError(f'MX lookup failed for {recipient}: {exc}') from exc
+
+            for _, mx_host in mx_hosts:
+                try:
+                    logger.info(
+                        'relay_mx_raw trying MX mail_from=%s to=%s mx=%s:25',
+                        mail_from,
+                        recipient,
+                        mx_host,
+                    )
+                    await aiosmtplib.send(
+                        out,
+                        sender=mail_from,
+                        recipients=[recipient],
+                        hostname=mx_host,
+                        port=25,
+                        start_tls=True,
+                        timeout=SMTP_CLIENT_TIMEOUT,
+                    )
+                    delivered = True
+                    logger.info(
+                        'Outbound delivered via direct MX mail_from=%s to=%s mx=%s',
+                        mail_from,
+                        recipient,
+                        mx_host,
+                    )
+                    break
+                except Exception as exc:
+                    logger.info('relay_mx_raw MX try failed mx=%s to=%s: %s', mx_host, recipient, exc)
+                    continue
+        else:
+            logger.info(
+                'relay_mx_raw skipping direct MX (SMTP_OUTBOUND_SKIP_DIRECT_MX=true) recipient=%s',
+                recipient,
+            )
 
         if not delivered and (settings.smtp_outbound_relay_host or '').strip():
             logger.info('Direct MX failed for %s; trying smarthost for mail_from=%s', recipient, mail_from)
