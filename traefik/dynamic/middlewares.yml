@@ -4,11 +4,3 @@ http:
       headers:
         stsSeconds: 31536000
         forceSTSHeader: true
-
-  # Referenced from Docker labels as backend-timeout@file (no hostnames or secrets here).
-  serversTransports:
-    backend-timeout:
-      forwardingTimeouts:
-        dialTimeout: 10s
-        responseHeaderTimeout: 120s
-        idleConnTimeout: 120s

@@ -3,8 +3,12 @@ services:
     image: traefik:v3.7.0
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Passed into static config (${ACME_EMAIL} in traefik.yml). Must be a real RFC email (Let's Encrypt rejects literals like ${VAR}).
+      ACME_EMAIL: ${ACME_EMAIL}
     ports: ["80:80","443:443"]
     volumes:
+      # Dynamic dir: routing is via Docker labels only. Remove any orphaned routes.yml — old files break Traefik parsing.
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
       - ./traefik/acme:/acme
@@ -56,7 +60,6 @@ services:
       - "traefik.http.routers.backend-health.priority=100"
       - "traefik.http.routers.backend-health.service=backend-svc"
       - "traefik.http.services.backend-svc.loadbalancer.server.port=8000"
-      - "traefik.http.services.backend-svc.loadbalancer.serverstransport=backend-timeout@file"
     depends_on:
       postgres:
         condition: service_healthy
