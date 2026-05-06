@@ -34,6 +34,9 @@ async def _init_db() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from backend.runtime import set_main_loop
+
+    set_main_loop(asyncio.get_running_loop())
     await _init_db()
     smtp25, smtp587 = await create_smtp_servers()
     imap_server = await create_imap_server()
@@ -44,6 +47,9 @@ async def lifespan(app: FastAPI):
     imap_server.close()
     await imap_server.wait_closed()
     imap_task.cancel()
+    from backend.database import engine
+
+    await engine.dispose()
 
 app = FastAPI(lifespan=lifespan)
 add_rate_limiting(app)

@@ -118,6 +118,62 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
     return {'success': len(failed) == 0, 'message_id': msg['Message-ID'], 'failed_recipients': failed}
 
 
+async def relay_mx_raw(mail_from: str, recipients: list[str], raw: bytes) -> None:
+    """
+    Deliver an RFC822 payload to each recipient via their MX (port 25).
+    Used by authenticated SMTP submission for non-local addresses. Must run on the FastAPI event loop.
+    """
+    if not recipients:
+        return
+    dkim_data = await _load_dkim_key(mail_from)
+    out = raw
+    if dkim_data:
+        selector, private_key = dkim_data
+        out = sign_message(out, selector, mail_from.split('@')[-1].lower(), private_key)
+
+    sender_mailbox_id = None
+    async with AsyncSessionLocal() as db:
+        mailbox_result = await db.execute(select(Mailbox).where(Mailbox.full_address == mail_from.lower()))
+        mailbox = mailbox_result.scalar_one_or_none()
+        if mailbox is not None:
+            sender_mailbox_id = mailbox.id
+
+    failed: list[str] = []
+    for recipient in recipients:
+        if sender_mailbox_id and await _is_unsubscribed(sender_mailbox_id, recipient):
+            failed.append(recipient)
+            continue
+        domain = recipient.split('@')[-1]
+        try:
+            mx_records = dns.resolver.resolve(domain, 'MX')
+            mx_hosts = sorted([(r.preference, str(r.exchange).rstrip('.')) for r in mx_records], key=lambda x: x[0])
+        except Exception as exc:
+            raise SMTPDeliveryError(f'MX lookup failed for {recipient}: {exc}') from exc
+
+        delivered = False
+        for _, mx_host in mx_hosts:
+            try:
+                await aiosmtplib.send(
+                    out,
+                    sender=mail_from,
+                    recipients=[recipient],
+                    hostname=mx_host,
+                    port=25,
+                    start_tls=True,
+                    timeout=SMTP_CLIENT_TIMEOUT,
+                )
+                delivered = True
+                break
+            except Exception:
+                continue
+
+        if not delivered:
+            failed.append(recipient)
+
+    if failed and len(failed) == len(recipients):
+        raise SMTPDeliveryError(f'Failed all recipients: {failed}')
+
+
 async def send_email(to: list[str] | str, subject: str, body_text: str, body_html: str | None = None, **kwargs: object) -> dict[str, object]:
     recipients = [to] if isinstance(to, str) else to
     return await send_direct(
