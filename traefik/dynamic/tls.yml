@@ -1,4 +1,0 @@
-tls:
-  certificates:
-    - certFile: /etc/letsencrypt/live/mail.sudoinnovation.tech/fullchain.pem
-      keyFile:  /etc/letsencrypt/live/mail.sudoinnovation.tech/privkey.pem

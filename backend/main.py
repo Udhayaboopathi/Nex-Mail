@@ -80,8 +80,8 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/health/ready")
-async def health_ready() -> JSONResponse | dict[str, str]:
+@app.get("/health/ready", response_model=None)
+async def health_ready():
     """Checks DB connectivity. Call if /health is OK but login returns 504."""
     try:
         async with AsyncSessionLocal() as db:

@@ -42,20 +42,21 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik-public"
-      # HTTP → HTTPS redirect handled by Traefik entryPoint redirect
-      # HTTPS router for /api
-      - "traefik.http.routers.backend-api.rule=PathPrefix(`/api`)"
+      # DOMAIN from .env — public HTTPS hostname (e.g. mail.example.com)
+      - "traefik.http.routers.backend-api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)"
       - "traefik.http.routers.backend-api.entrypoints=websecure"
       - "traefik.http.routers.backend-api.tls=true"
+      - "traefik.http.routers.backend-api.tls.certresolver=letsencrypt"
       - "traefik.http.routers.backend-api.priority=100"
       - "traefik.http.routers.backend-api.service=backend-svc"
-      # HTTPS router for /health
-      - "traefik.http.routers.backend-health.rule=PathPrefix(`/health`)"
+      - "traefik.http.routers.backend-health.rule=Host(`${DOMAIN}`) && PathPrefix(`/health`)"
       - "traefik.http.routers.backend-health.entrypoints=websecure"
       - "traefik.http.routers.backend-health.tls=true"
+      - "traefik.http.routers.backend-health.tls.certresolver=letsencrypt"
       - "traefik.http.routers.backend-health.priority=100"
       - "traefik.http.routers.backend-health.service=backend-svc"
       - "traefik.http.services.backend-svc.loadbalancer.server.port=8000"
+      - "traefik.http.services.backend-svc.loadbalancer.serverstransport=backend-timeout@file"
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,6 +75,7 @@ services:
       - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`) && !PathPrefix(`/api`) && !PathPrefix(`/health`)"
       - "traefik.http.routers.frontend.entrypoints=websecure"
       - "traefik.http.routers.frontend.tls=true"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
       - "traefik.http.routers.frontend.priority=1"
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
     networks: [traefik-public]
