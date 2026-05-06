@@ -50,7 +50,7 @@ services:
       - "traefik.http.routers.backend-api.priority=100"
       - "traefik.http.routers.backend-api.service=backend-svc"
       # HTTPS router for /health
-      - "traefik.http.routers.backend-health.rule=Path(`/health`)"
+      - "traefik.http.routers.backend-health.rule=PathPrefix(`/health`)"
       - "traefik.http.routers.backend-health.entrypoints=websecure"
       - "traefik.http.routers.backend-health.tls=true"
       - "traefik.http.routers.backend-health.priority=100"

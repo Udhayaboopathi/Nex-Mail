@@ -108,16 +108,23 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              <div className="flex items-center justify-between text-sm">
-                <label className="flex items-center gap-2 cursor-pointer text-gray-600 dark:text-gray-400">
+              {error ? (
+                <p
+                  role="alert"
+                  className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-lg border border-red-100 dark:border-red-900/40"
+                >
+                  {error}
+                </p>
+              ) : null}
+
+              <div className="flex items-start justify-between gap-3 text-sm">
+                <label className="flex items-center gap-2 cursor-pointer text-gray-600 dark:text-gray-400 shrink-0">
                   <input type="checkbox" className="accent-indigo-600" /> Remember me
                 </label>
-                <Link href="/forgot-password" className="text-indigo-600 dark:text-indigo-400 hover:underline">
+                <Link href="/forgot-password" className="text-indigo-600 dark:text-indigo-400 hover:underline whitespace-nowrap">
                   Forgot password?
                 </Link>
               </div>
-
-              {error && <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-2.5 rounded-lg">{error}</p>}
 
               <button
                 type="submit"

@@ -1,7 +1,7 @@
 http:
   routers:
     backend-api:
-      rule: "Host(`mail.sudoinnovation.tech`) && (Path(`/health`) || PathPrefix(`/api`))"
+      rule: "Host(`mail.sudoinnovation.tech`) && (PathPrefix(`/health`) || PathPrefix(`/api`))"
       entryPoints:
         - websecure
       service: backend-api-svc
@@ -16,8 +16,16 @@ http:
       priority: 1
       tls: {}
 
+  serversTransports:
+    backend-timeout:
+      forwardingTimeouts:
+        dialTimeout: 10s
+        responseHeaderTimeout: 120s
+        idleConnTimeout: 120s
+
   services:
     backend-api-svc:
+      serversTransport: backend-timeout
       loadBalancer:
         servers:
           - url: "http://backend:8000"

@@ -38,6 +38,8 @@ async function request<T>(
     else if (res.status === 403) msg = "Access denied.";
     else if (res.status === 404) msg = "Service not found — is the backend running?";
     else if (res.status === 429) msg = "Too many attempts. Please wait and try again.";
+    else if (res.status === 504 || res.status === 502)
+      msg = "Gateway timeout — API did not respond in time. On the server, check DATABASE_URL (host must be `postgres` in Docker), Postgres health, and `curl https://…/health/ready`.";
     else if (res.status >= 500) msg = "Server error. Please try again later.";
     throw new Error(msg);
   }

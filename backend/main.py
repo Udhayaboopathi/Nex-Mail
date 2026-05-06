@@ -1,7 +1,12 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+
+from backend.database import AsyncSessionLocal
 from backend.api.middleware.rate_limit import add_rate_limiting
 from backend.api.middleware.audit import add_audit_logging
 from backend.smtp.server import create_smtp_servers
@@ -73,3 +78,18 @@ app.include_router(ediscovery.router, prefix="/api/admin/ediscovery")
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def health_ready() -> JSONResponse | dict[str, str]:
+    """Checks DB connectivity. Call if /health is OK but login returns 504."""
+    try:
+        async with AsyncSessionLocal() as db:
+            await db.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "reachable"}
+    except Exception as exc:
+        logger.warning("readiness DB check failed: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "detail": f"Database unreachable: {exc}"},
+        )
