@@ -316,7 +316,10 @@ async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
                 "SMTP_SUBMISSION_HOST is your public name (many hosts cannot hairpin to their own :587)."
             )
         raise HTTPException(status_code=502, detail=msg) from exc
-    return TestMailResponse(ok=True, detail="Message accepted by your SMTP server.")
+    return TestMailResponse(
+        ok=True,
+        detail="Message accepted on port 587. External recipients are relayed in the background; check the inbox and backend logs if delivery is slow.",
+    )
 
 
 @router.get("/domains", response_model=list[DomainItem])

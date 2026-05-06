@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import email
+import logging
 from email.message import Message
 from mailbox import Maildir
 from pathlib import Path
@@ -13,6 +14,8 @@ from backend.config import settings
 from backend.database_sync import SessionLocalSync
 from backend.models import Alias, Domain, Mailbox
 from backend.smtp.dkim import verify_message
+
+logger = logging.getLogger(__name__)
 
 
 def _fallback_maildir_path(rcpt: str) -> str:
@@ -187,19 +190,43 @@ class SubmissionHandler(InboundHandler):
                 return err
 
         if remote_rcpts:
+            # Do not await relay: aiosmtplib (and the HTTP mail-test client) would block until MX/smarthost
+            # delivery finishes, often exceeding client timeouts when :25 is slow or blocked.
             from backend.runtime import get_main_loop
             from backend.smtp.outbound import SMTPDeliveryError, relay_mx_raw
 
             loop = get_main_loop()
-            fut = asyncio.run_coroutine_threadsafe(
-                relay_mx_raw(mail_from, remote_rcpts, raw),
-                loop,
-            )
-            try:
-                await asyncio.wrap_future(fut)
-            except SMTPDeliveryError as exc:
-                return f"451 {exc}"
-            except Exception as exc:
-                return f"451 relay error: {exc}"
+
+            async def _relay_bg() -> None:
+                try:
+                    await relay_mx_raw(mail_from, remote_rcpts, raw)
+                except SMTPDeliveryError as exc:
+                    logger.error(
+                        "Submission relay failed (mail_from=%s recipients=%s): %s",
+                        mail_from,
+                        remote_rcpts,
+                        exc,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Submission relay error (mail_from=%s recipients=%s)",
+                        mail_from,
+                        remote_rcpts,
+                    )
+
+            def _schedule() -> None:
+                task = loop.create_task(_relay_bg())
+
+                def _swallow_task_result(t: asyncio.Task) -> None:
+                    try:
+                        t.result()
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        pass
+
+                task.add_done_callback(_swallow_task_result)
+
+            loop.call_soon_threadsafe(_schedule)
 
         return "250 Message accepted for delivery"
