@@ -19,10 +19,10 @@ export default function SuperAdminDashboard() {
 
   const cards = stats
     ? [
-        { label: "Total Domains",   value: stats.domains   ?? 0, icon: Globe,       color: "text-indigo-600 dark:text-indigo-400", bg: "bg-indigo-50 dark:bg-indigo-900/20" },
-        { label: "Total Users",     value: stats.users     ?? 0, icon: Shield,      color: "text-green-600 dark:text-green-400",   bg: "bg-green-50 dark:bg-green-900/20" },
-        { label: "Total Mailboxes", value: stats.mailboxes ?? 0, icon: Mail,        color: "text-blue-600 dark:text-blue-400",     bg: "bg-blue-50 dark:bg-blue-900/20" },
-        { label: "Platform Status", value: 1,                    icon: TrendingUp,  color: "text-purple-600 dark:text-purple-400", bg: "bg-purple-50 dark:bg-purple-900/20" },
+        { label: "Total Domains", value: stats.total_domains ?? 0, icon: Globe, color: "text-indigo-600 dark:text-indigo-400", bg: "bg-indigo-50 dark:bg-indigo-900/20" },
+        { label: "Active Domains", value: stats.active_domains ?? 0, icon: Shield, color: "text-green-600 dark:text-green-400", bg: "bg-green-50 dark:bg-green-900/20" },
+        { label: "Total Mailboxes", value: stats.total_mailboxes ?? 0, icon: Mail, color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-50 dark:bg-blue-900/20" },
+        { label: "Messages Today", value: stats.total_messages_today ?? 0, icon: TrendingUp, color: "text-purple-600 dark:text-purple-400", bg: "bg-purple-50 dark:bg-purple-900/20" },
       ]
     : [];
 
