@@ -68,7 +68,8 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
 
 
 async def create_imap_server() -> asyncio.base_events.Server:
-    ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    # Reuse the same self-signed fallback cert helper from the SMTP module
+    from backend.smtp.server import _build_tls_context
+    ctx = _build_tls_context()
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    ctx.load_cert_chain("/etc/ssl/mail/fullchain.pem", "/etc/ssl/mail/privkey.pem")
     return await asyncio.start_server(_handle_client, host="0.0.0.0", port=993, ssl=ctx)
