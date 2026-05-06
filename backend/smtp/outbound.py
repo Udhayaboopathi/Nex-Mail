@@ -27,10 +27,10 @@ class SMTPDeliveryError(Exception):
 
 def _smtp_delivery_hint() -> str:
     if (settings.smtp_outbound_relay_host or '').strip():
-        return ''
+        return ' Direct MX was exhausted; check SMTP_OUTBOUND_RELAY_* credentials and provider logs if smarthost also failed.'
     return (
-        ' Many hosts block outbound TCP 25. Set SMTP_OUTBOUND_RELAY_HOST (and optional user/password) '
-        'to relay on port 587, e.g. your provider SMTP or a transactional service.'
+        ' Many hosts block outbound TCP 25. Set SMTP_OUTBOUND_RELAY_HOST (and user/password) as a fallback smarthost '
+        'after direct MX fails.'
     )
 
 
@@ -170,7 +170,7 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
 
 async def relay_mx_raw(mail_from: str, recipients: list[str], raw: bytes) -> None:
     """
-    Deliver an RFC822 payload to each recipient via their MX (port 25).
+    Deliver an RFC822 payload per recipient: try their MX on port 25 first, then SMTP_OUTBOUND_RELAY_* if set and MX failed.
     Used by authenticated SMTP submission for non-local addresses. Must run on the FastAPI event loop.
     """
     if not recipients:

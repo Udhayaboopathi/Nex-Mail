@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     smtp_submission_connect_host: str = ""
     smtp_submission_tls_insecure: bool = False  # If True, skip TLS cert verification (e.g. IP vs cert name).
     smtp_test_mail_from: str = ""
-    # After direct MX :25 fails (common when VPS blocks outbound 25), relay via this host (587 + AUTH).
+    # Optional smarthost (e.g. Brevo) used only after direct MX :25 delivery fails — not the primary path.
     smtp_outbound_relay_host: str = ""
     smtp_outbound_relay_port: int = 587
     smtp_outbound_relay_user: str = ""
