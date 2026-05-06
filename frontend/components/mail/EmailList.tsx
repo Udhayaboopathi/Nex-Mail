@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Trash2, Archive, Mail, MailOpen, Flag, AlertTriangle } from "lucide-react";
+import { Trash2, Archive, Mail, MailOpen, AlertTriangle } from "lucide-react";
 import { EmailListItem } from "./EmailListItem";
 import { toast } from "../ui/Toast";
 import { mailApi } from "../../lib/api";

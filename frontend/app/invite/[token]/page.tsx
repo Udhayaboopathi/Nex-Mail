@@ -5,7 +5,6 @@ import { useParams, useRouter } from "next/navigation";
 import { Eye, EyeOff, Mail } from "lucide-react";
 import { authApi } from "../../../lib/api";
 import { setToken } from "../../../lib/auth";
-import type { Role } from "../../../types";
 
 export default function AcceptInvitePage() {
   const { token } = useParams<{ token: string }>();

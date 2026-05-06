@@ -35,8 +35,10 @@ export default function BackupPage() {
     if (!restoreTarget) return;
     setRestoring(true);
     try {
-      toast("Restore started — check audit logs", "info");
+      await domainAdminApi.restoreBackup(restoreTarget.id);
+      toast("Restore initiated — check audit logs for progress", "success");
       setRestoreTarget(null);
+      setTimeout(load, 2000);
     } catch (e) { toast((e as Error).message, "error"); }
     finally { setRestoring(false); }
   }

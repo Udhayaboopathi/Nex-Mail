@@ -51,7 +51,8 @@ function ToastItem({ toast, onDismiss }: ToastItemProps) {
 }
 
 // ─── Global toast state (module-level for simplicity) ──────────────────────
-let _setToasts: React.Dispatch<React.SetStateAction<ToastMessage[]>> | null = null;
+import type { Dispatch, SetStateAction } from "react";
+let _setToasts: Dispatch<SetStateAction<ToastMessage[]>> | null = null;
 
 export function toast(message: string, variant: ToastVariant = "info") {
   const id = Math.random().toString(36).slice(2);

@@ -10,7 +10,7 @@ const sections = [
   { href: "/settings/rules", icon: Filter, label: "Rules", desc: "Auto-file incoming email" },
   { href: "/settings/templates", icon: FileText, label: "Templates", desc: "Reusable email templates" },
   { href: "/settings/labels", icon: Tag, label: "Labels", desc: "Organize with color labels" },
-  { href: "/mail/inbox", icon: Mail, label: "Autoresponder", desc: "Out-of-office reply settings" },
+  { href: "/settings/autoresponder", icon: Mail, label: "Autoresponder", desc: "Out-of-office reply settings" },
 ];
 
 export default function SettingsPage() {

@@ -39,7 +39,8 @@ export function DNSSetupModal({ domainId, domainName, onClose }: DNSSetupModalPr
     }
   }
 
-  useEffect(() => { loadStatus(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadStatus(); }, [domainId]);
 
   const records = status
     ? [

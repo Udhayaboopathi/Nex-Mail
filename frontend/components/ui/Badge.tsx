@@ -1,9 +1,10 @@
+import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 
 type BadgeVariant = "default" | "success" | "warning" | "danger" | "info" | "purple";
 
 interface BadgeProps {
-  children: React.ReactNode;
+  children: ReactNode;
   variant?: BadgeVariant;
   className?: string;
 }

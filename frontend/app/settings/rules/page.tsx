@@ -44,7 +44,7 @@ export default function RulesPage() {
               <Filter className="w-12 h-12 mx-auto mb-3 opacity-30" />
               <p className="text-sm">No rules. Create your first rule to auto-organize email.</p>
             </div>
-          ) : rules.sort((a, b) => a.priority - b.priority).map((r) => (
+          ) : [...rules].sort((a, b) => a.priority - b.priority).map((r) => (
             <div key={r.id} className="p-4 bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">

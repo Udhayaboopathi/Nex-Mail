@@ -128,6 +128,7 @@ export const domainAdminApi = {
   getAuditLogs: (p = 1) => get<Paginated<AuditLog>>(`/api/domain-admin/audit-logs?page=${p}`),
   createBackup: () => post<{ job_id: string }>("/api/domain-admin/backup"),
   getBackupJobs: () => get<BackupJob[]>("/api/domain-admin/backup/jobs"),
+  restoreBackup: (jobId: string) => post(`/api/domain-admin/backup/restore`, { job_id: jobId }),
   ediscoverySearch: (query: unknown) => post("/api/domain-admin/ediscovery/search", query),
   ediscoveryExport: (query: unknown) => post("/api/domain-admin/ediscovery/export", query),
   getEdiscoveryExports: () => get("/api/domain-admin/ediscovery/exports"),

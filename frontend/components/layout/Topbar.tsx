@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { Sun, Moon, Bell, LogOut, Search as SearchIcon, Menu } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { clearToken } from "../../lib/auth";
@@ -18,7 +18,7 @@ export function Topbar({ email, onMenuToggle, onSearchChange, onThemeToggle, isD
   const router = useRouter();
   const [query, setQuery] = useState("");
 
-  function handleSearch(e: React.FormEvent) {
+  function handleSearch(e: FormEvent) {
     e.preventDefault();
     onSearchChange?.(query);
   }

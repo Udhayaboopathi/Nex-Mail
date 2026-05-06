@@ -1,3 +1,4 @@
+import type { ElementType } from "react";
 import { FileText, Image, Archive, File, Download } from "lucide-react";
 import { formatBytes } from "../../lib/utils";
 import type { Attachment } from "../../types";
@@ -6,7 +7,7 @@ interface AttachmentViewerProps {
   attachments: Attachment[];
 }
 
-function iconForType(contentType: string): React.ElementType {
+function iconForType(contentType: string): ElementType {
   if (contentType.startsWith("image/")) return Image;
   if (contentType === "application/pdf" || contentType.startsWith("text/")) return FileText;
   if (contentType.includes("zip") || contentType.includes("tar") || contentType.includes("gz")) return Archive;

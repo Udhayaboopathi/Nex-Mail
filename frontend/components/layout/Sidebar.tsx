@@ -1,5 +1,6 @@
 "use client";
 
+import type { ElementType } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -79,7 +80,7 @@ export function Sidebar({ role, folders = [], labels = [], usedMb = 0, quotaMb =
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5">
-        {nav.map(({ href, icon: Icon, label, folder }: { href: string; icon: React.ElementType; label: string; folder?: string }) => {
+        {nav.map(({ href, icon: Icon, label, folder }: { href: string; icon: ElementType; label: string; folder?: string }) => {
           const active = pathname === href || pathname.startsWith(href + "/");
           const unread = folder ? unreadMap[folder] : 0;
           return (

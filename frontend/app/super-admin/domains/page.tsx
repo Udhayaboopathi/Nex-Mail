@@ -28,7 +28,7 @@ export default function DomainsPage() {
 
   useEffect(() => { load(); }, []);
 
-  const filtered = domains.filter((d) => d.name.includes(search.toLowerCase()));
+  const filtered = domains.filter((d) => d.name.toLowerCase().includes(search.toLowerCase()));
 
   async function handleSuspend(d: Domain) {
     const reason = prompt(`Suspend reason for ${d.name}:`);
