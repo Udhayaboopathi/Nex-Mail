@@ -2,8 +2,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException
 from sqlalchemy import text
 
 from backend.database import AsyncSessionLocal
@@ -80,8 +79,8 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/health/ready", response_model=None)
-async def health_ready():
+@app.get("/health/ready")
+async def health_ready() -> dict[str, str]:
     """Checks DB connectivity. Call if /health is OK but login returns 504."""
     try:
         async with AsyncSessionLocal() as db:
@@ -89,7 +88,7 @@ async def health_ready():
         return {"status": "ok", "database": "reachable"}
     except Exception as exc:
         logger.warning("readiness DB check failed: %s", exc)
-        return JSONResponse(
+        raise HTTPException(
             status_code=503,
-            content={"status": "unavailable", "detail": f"Database unreachable: {exc}"},
-        )
+            detail=f"database_unreachable:{exc}",
+        ) from exc
