@@ -31,12 +31,18 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik-public"
       # HTTP → HTTPS redirect handled by Traefik entryPoint redirect
-      # HTTPS router for /api and /health
-      - "traefik.http.routers.backend-api.rule=PathPrefix(`/api`) || Path(`/health`)"
+      # HTTPS router for /api
+      - "traefik.http.routers.backend-api.rule=PathPrefix(`/api`)"
       - "traefik.http.routers.backend-api.entrypoints=websecure"
       - "traefik.http.routers.backend-api.tls=true"
       - "traefik.http.routers.backend-api.priority=100"
       - "traefik.http.routers.backend-api.service=backend-svc"
+      # HTTPS router for /health
+      - "traefik.http.routers.backend-health.rule=Path(`/health`)"
+      - "traefik.http.routers.backend-health.entrypoints=websecure"
+      - "traefik.http.routers.backend-health.tls=true"
+      - "traefik.http.routers.backend-health.priority=100"
+      - "traefik.http.routers.backend-health.service=backend-svc"
       - "traefik.http.services.backend-svc.loadbalancer.server.port=8000"
     depends_on:
       postgres:
