@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import smtplib
 from email.message import EmailMessage
 from email.utils import make_msgid
@@ -8,11 +9,13 @@ import aiosmtplib
 import dns.resolver
 from sqlalchemy import select
 
+from backend.config import settings
 from backend.core.encryption import decrypt_value
 from backend.database import AsyncSessionLocal
 from backend.models import Domain, Mailbox, UnsubscribeList
 from backend.smtp.dkim import sign_message
 
+logger = logging.getLogger(__name__)
 
 # Per-connection timeout so blocked outbound :25 does not hang the HTTP request indefinitely.
 SMTP_CLIENT_TIMEOUT = 25.0
@@ -20,6 +23,38 @@ SMTP_CLIENT_TIMEOUT = 25.0
 
 class SMTPDeliveryError(Exception):
     """Raised when SMTP direct delivery fails for all recipients."""
+
+
+def _smtp_delivery_hint() -> str:
+    if (settings.smtp_outbound_relay_host or '').strip():
+        return ''
+    return (
+        ' Many hosts block outbound TCP 25. Set SMTP_OUTBOUND_RELAY_HOST (and optional user/password) '
+        'to relay on port 587, e.g. your provider SMTP or a transactional service.'
+    )
+
+
+async def _try_outbound_smarthost(mail_from: str, recipient: str, raw: bytes) -> bool:
+    host = (settings.smtp_outbound_relay_host or '').strip()
+    if not host:
+        return False
+    user = (settings.smtp_outbound_relay_user or '').strip()
+    pw = settings.smtp_outbound_relay_password or ''
+    kwargs: dict = {
+        'hostname': host,
+        'port': int(settings.smtp_outbound_relay_port),
+        'start_tls': bool(settings.smtp_outbound_relay_use_tls),
+        'timeout': SMTP_CLIENT_TIMEOUT,
+    }
+    if user:
+        kwargs['username'] = user
+        kwargs['password'] = pw
+    try:
+        await aiosmtplib.send(raw, sender=mail_from, recipients=[recipient], **kwargs)
+        return True
+    except Exception as exc:
+        logger.warning('Outbound smarthost %s:%s → %s failed: %s', host, kwargs['port'], recipient, exc)
+        return False
 
 
 async def _is_unsubscribed(sender_mailbox_id, recipient: str) -> bool:
@@ -109,11 +144,14 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
             except Exception:
                 continue
 
+        if not delivered and (settings.smtp_outbound_relay_host or '').strip():
+            delivered = await _try_outbound_smarthost(from_addr, recipient, raw)
+
         if not delivered:
             failed.append(recipient)
 
     if failed and len(failed) == len(to_list):
-        raise SMTPDeliveryError(f'Failed all recipients: {failed}')
+        raise SMTPDeliveryError(f'Failed all recipients: {failed}.{_smtp_delivery_hint()}')
 
     return {'success': len(failed) == 0, 'message_id': msg['Message-ID'], 'failed_recipients': failed}
 
@@ -167,11 +205,14 @@ async def relay_mx_raw(mail_from: str, recipients: list[str], raw: bytes) -> Non
             except Exception:
                 continue
 
+        if not delivered and (settings.smtp_outbound_relay_host or '').strip():
+            delivered = await _try_outbound_smarthost(mail_from, recipient, out)
+
         if not delivered:
             failed.append(recipient)
 
     if failed and len(failed) == len(recipients):
-        raise SMTPDeliveryError(f'Failed all recipients: {failed}')
+        raise SMTPDeliveryError(f'Failed all recipients: {failed}.{_smtp_delivery_hint()}')
 
 
 async def send_email(to: list[str] | str, subject: str, body_text: str, body_html: str | None = None, **kwargs: object) -> dict[str, object]:

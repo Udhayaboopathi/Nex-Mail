@@ -44,4 +44,13 @@ async def send_via_submission(
             timeout=timeout,
         )
     except Exception as exc:
-        raise SubmissionSMTPError(str(exc)) from exc
+        parts: list[str] = [f"{type(exc).__name__}: {exc}"]
+        code = getattr(exc, "smtp_code", None)
+        if code is not None:
+            parts.append(f"smtp_code={code}")
+        detail = getattr(exc, "smtp_detail", None)
+        if detail:
+            parts.append(f"smtp_detail={detail!r}")
+        if exc.__cause__:
+            parts.append(f"cause={exc.__cause__!r}")
+        raise SubmissionSMTPError(" | ".join(parts)) from exc

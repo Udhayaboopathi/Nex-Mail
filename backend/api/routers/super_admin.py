@@ -105,6 +105,9 @@ class MailTestStatusResponse(BaseModel):
     host: str | None = None
     port: int | None = None
     from_hint: str | None = None
+    outbound_relay_configured: bool = False
+    outbound_relay_host: str | None = None
+    outbound_relay_port: int | None = None
 
 
 def _is_consumer_gmail(email: str) -> bool:
@@ -231,11 +234,15 @@ async def mail_test_status() -> MailTestStatusResponse:
     # Password optional for self-hosted Nex Mail (port 587 stub-auth). Required for real external SMTP.
     configured = bool(host and user)
     from_hint = (settings.smtp_test_mail_from or "").strip() or settings.super_admin_email
+    relay_host = (settings.smtp_outbound_relay_host or "").strip()
     return MailTestStatusResponse(
         submission_configured=configured,
         host=host or None,
         port=settings.smtp_submission_port,
         from_hint=from_hint or None,
+        outbound_relay_configured=bool(relay_host),
+        outbound_relay_host=relay_host or None,
+        outbound_relay_port=int(settings.smtp_outbound_relay_port) if relay_host else None,
     )
 
 

@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     smtp_submission_password: str = ""
     smtp_submission_use_tls: bool = True
     smtp_test_mail_from: str = ""
+    # After direct MX :25 fails (common when VPS blocks outbound 25), relay via this host (587 + AUTH).
+    smtp_outbound_relay_host: str = ""
+    smtp_outbound_relay_port: int = 587
+    smtp_outbound_relay_user: str = ""
+    smtp_outbound_relay_password: str = ""
+    smtp_outbound_relay_use_tls: bool = True
     # When False, FastAPI skips Base.metadata.create_all on startup (use with Alembic).
     metadata_create_all_on_startup: bool = True
 

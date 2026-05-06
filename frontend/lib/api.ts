@@ -94,6 +94,9 @@ export const superAdminApi = {
       host: string | null;
       port: number | null;
       from_hint: string | null;
+      outbound_relay_configured: boolean;
+      outbound_relay_host: string | null;
+      outbound_relay_port: number | null;
     }>("/api/super-admin/mail/test-status"),
   sendTestMail: (to: string) =>
     post<{ ok: boolean; detail: string | null }>("/api/super-admin/mail/test", { to }),
