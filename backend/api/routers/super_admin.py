@@ -310,6 +310,15 @@ async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
         )
     except SubmissionSMTPError as exc:
         msg = str(exc)
+        logger.error(
+            "Super-admin mail test failed: tcp=%s:%s logical_submission_host=%s mail_from=%s to=%s error=%s",
+            tcp,
+            settings.smtp_submission_port,
+            host,
+            mail_from,
+            to_addr,
+            msg,
+        )
         if "timed out" in msg.lower():
             msg += (
                 " Common fix in Docker: set SMTP_SUBMISSION_CONNECT_HOST=127.0.0.1 when "
