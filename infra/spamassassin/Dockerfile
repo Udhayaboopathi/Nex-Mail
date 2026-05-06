@@ -14,24 +14,17 @@ RUN apt-get update && \
 
 # Copy local config
 COPY local.cf /etc/spamassassin/local.cf
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Create runtime user and working directory
 RUN useradd -r -s /bin/false spamd && \
     mkdir -p /var/lib/spamassassin /var/run/spamd && \
     chown -R spamd:spamd /var/lib/spamassassin /var/run/spamd
 
-# Update SA rules (best-effort — no GPG needed for basic rules)
+# Update SA rules (best-effort)
 RUN sa-update --no-gpg || true
 
 EXPOSE 783
 
-# Use full path to avoid $PATH issues in containers
-CMD ["/usr/sbin/spamd", \
-     "--listen=0.0.0.0", \
-     "--port=783", \
-     "--nouser-config", \
-     "--username=spamd", \
-     "--helper-home-dir=/var/lib/spamassassin", \
-     "--pidfile=/var/run/spamd/spamd.pid", \
-     "--syslog=stderr", \
-     "-D"]
+ENTRYPOINT ["/entrypoint.sh"]
