@@ -7,6 +7,9 @@ services:
     command:
       - --configFile=/etc/traefik/traefik.yml
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      # Ensure stdout gets logs (Compose: `docker compose logs traefik`; recreate after changing: --force-recreate)
+      - --log.level=INFO
+      - --accesslog=true
     ports: ["80:80","443:443"]
     volumes:
       # Routing = Docker labels only. Remove orphaned traefik/dynamic/routes.yml if Traefik logs parse errors.

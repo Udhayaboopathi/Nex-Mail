@@ -2,6 +2,12 @@ api:
   dashboard: true
   insecure: false
 
+# So `docker compose logs traefik` shows routing and ACME activity (defaults are very quiet).
+log:
+  level: INFO
+
+accessLog: {}
+
 entryPoints:
   web:
     address: ':80'
