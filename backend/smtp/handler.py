@@ -198,8 +198,10 @@ class SubmissionHandler(InboundHandler):
             loop = get_main_loop()
 
             async def _relay_bg() -> None:
+                logger.info('Submission background relay starting mail_from=%s recipients=%s', mail_from, remote_rcpts)
                 try:
                     await relay_mx_raw(mail_from, remote_rcpts, raw)
+                    logger.info('Submission background relay finished OK mail_from=%s recipients=%s', mail_from, remote_rcpts)
                 except SMTPDeliveryError as exc:
                     logger.error(
                         "Submission relay failed (mail_from=%s recipients=%s): %s",

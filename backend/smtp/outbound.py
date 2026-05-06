@@ -63,6 +63,13 @@ async def _try_outbound_smarthost(mail_from: str, recipient: str, raw: bytes) ->
         kwargs['password'] = pw
     try:
         await aiosmtplib.send(raw, sender=mail_from, recipients=[recipient], **kwargs)
+        logger.info(
+            'Outbound delivered via smarthost %s:%s mail_from=%s to=%s',
+            host,
+            kwargs['port'],
+            mail_from,
+            recipient,
+        )
         return True
     except Exception as exc:
         logger.warning('Outbound smarthost %s:%s → %s failed: %s', host, kwargs['port'], recipient, exc)
@@ -152,11 +159,18 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
                     timeout=SMTP_CLIENT_TIMEOUT,
                 )
                 delivered = True
+                logger.info(
+                    'Outbound delivered via direct MX mail_from=%s to=%s mx=%s',
+                    from_addr,
+                    recipient,
+                    mx_host,
+                )
                 break
             except Exception:
                 continue
 
         if not delivered and (settings.smtp_outbound_relay_host or '').strip():
+            logger.info('Direct MX failed for %s; trying smarthost for mail_from=%s', recipient, from_addr)
             delivered = await _try_outbound_smarthost(from_addr, recipient, raw)
 
         if not delivered:
@@ -213,18 +227,36 @@ async def relay_mx_raw(mail_from: str, recipients: list[str], raw: bytes) -> Non
                     timeout=SMTP_CLIENT_TIMEOUT,
                 )
                 delivered = True
+                logger.info(
+                    'Outbound delivered via direct MX mail_from=%s to=%s mx=%s',
+                    mail_from,
+                    recipient,
+                    mx_host,
+                )
                 break
             except Exception:
                 continue
 
         if not delivered and (settings.smtp_outbound_relay_host or '').strip():
+            logger.info('Direct MX failed for %s; trying smarthost for mail_from=%s', recipient, mail_from)
             delivered = await _try_outbound_smarthost(mail_from, recipient, out)
 
         if not delivered:
             failed.append(recipient)
 
+    if failed:
+        ok = [r for r in recipients if r not in failed]
+        if ok:
+            logger.warning(
+                'relay_mx_raw partial failure: not delivered to %s (delivered to %s, mail_from=%s)',
+                failed,
+                ok,
+                mail_from,
+            )
     if failed and len(failed) == len(recipients):
         raise SMTPDeliveryError(f'Failed all recipients: {failed}.{_smtp_delivery_hint()}')
+    if not failed:
+        logger.info('relay_mx_raw completed mail_from=%s recipients=%s', mail_from, recipients)
 
 
 async def send_email(to: list[str] | str, subject: str, body_text: str, body_html: str | None = None, **kwargs: object) -> dict[str, object]:
