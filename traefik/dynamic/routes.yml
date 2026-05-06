@@ -1,6 +1,8 @@
+# Hostname: change mail.sudoinnovation.tech to match DOMAIN in .env (your public mail URL).
 http:
   routers:
     backend-api:
+      # PathPrefix(`/health`) so /health and /health/ready both hit FastAPI — not Next.js.
       rule: "Host(`mail.sudoinnovation.tech`) && (PathPrefix(`/health`) || PathPrefix(`/api`))"
       entryPoints:
         - websecure
@@ -9,7 +11,8 @@ http:
       tls: {}
 
     frontend-web:
-      rule: "Host(`mail.sudoinnovation.tech`)"
+      # Exclude API and health prefixes so they never hit Next even if priorities change.
+      rule: "Host(`mail.sudoinnovation.tech`) && !PathPrefix(`/api`) && !PathPrefix(`/health`)"
       entryPoints:
         - websecure
       service: frontend-web-svc
