@@ -46,7 +46,12 @@ export function AssignAdminModal({ domainId, domainName, onClose, onAssigned }: 
       });
       toast(`Admin assigned for ${domainName}`, "success");
       if (isConsumerGmail(email)) {
-        if (res.welcome_email_sent) {
+        if (res.welcome_email_queued) {
+          toast(
+            "Admin saved. Welcome email is sending in the background — check the inbox (and spam). If nothing arrives, your host may block outbound port 25.",
+            "info"
+          );
+        } else if (res.welcome_email_sent) {
           toast("Login details were emailed to the Gmail address.", "success");
         } else if (res.welcome_email_error) {
           toast(`Assigned, but email failed: ${res.welcome_email_error}`, "error");

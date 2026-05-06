@@ -8,14 +8,43 @@ from datetime import datetime, timezone
 import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from sqlalchemy import select
 
 from backend.config import settings
-from backend.core.encryption import encrypt_value
+from backend.core.encryption import decrypt_value, encrypt_value
 from backend.database import AsyncSessionLocal
 from backend.models.all_models import Domain, User
 
 logger = logging.getLogger(__name__)
+
+
+def build_dkim_txt_record(domain: Domain) -> str | None:
+    """Return the full DKIM TXT value (v=DKIM1; k=rsa; p=...) for DNS, or None if no key."""
+    if not domain.dkim_private_key_encrypted:
+        return None
+    try:
+        private_pem = decrypt_value(domain.dkim_private_key_encrypted).encode()
+        private_key = load_pem_private_key(private_pem, password=None)
+        public_pem = (
+            private_key.public_key()
+            .public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            .decode()
+        )
+        b64 = "".join(public_pem.splitlines()[1:-1])
+        return f"v=DKIM1; k=rsa; p={b64}"
+    except Exception as exc:
+        logger.warning("Could not build DKIM TXT for domain %s: %s", domain.name, exc)
+        return None
+
+
+def dkim_txt_dns_name(domain: Domain) -> str:
+    """Relative DNS name under the apex zone, e.g. mail._domainkey for selector mail."""
+    sel = domain.dkim_selector or settings.dkim_selector
+    return f"{sel}._domainkey"
 
 
 async def fetch_cloudflare_zone_id(api_token: str, domain_name: str) -> str | None:

@@ -209,28 +209,62 @@ The `~all` softfail is a safe starting point.  Change to `-all` once you are sur
 
 ### 5.4 DKIM Record
 
-After the backend starts for the first time, retrieve your DKIM public key:
+DKIM keys are created when you **add a domain** in the super-admin UI (or when calling `POST /api/super-admin/domains`). Each domain has its own key pair; the **private** key stays in the database (encrypted).
+
+**Get the TXT record (recommended — super-admin API)**
 
 ```bash
-# Inside the running backend container:
-docker compose exec backend python -c "
-from backend.services.domain_service import verify_dns
-import asyncio, json
-# Or read directly from DB using psql
-"
+# 1) Log in and set TOKEN (JSON access_token)
+TOKEN=$(curl -s -X POST https://mail.yourdomain.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"YOUR_SUPER_ADMIN_EMAIL","password":"YOUR_PASSWORD"}' \
+  | jq -r '.access_token')
 
-# Or query the API (after super-admin login):
+# 2) List domains — each item includes dkim_dns_name and dkim_txt_record
 curl -s -H "Authorization: Bearer $TOKEN" \
-  https://mail.yourdomain.com/api/super-admin/domains | jq '.[0].dkim_public_key'
+  https://mail.yourdomain.com/api/super-admin/domains | jq .
+
+# 3) Example: print DKIM for the first domain
+curl -s -H "Authorization: Bearer $TOKEN" \
+  https://mail.yourdomain.com/api/super-admin/domains \
+  | jq '.[0] | {name, dkim_selector, dkim_dns_name, dkim_txt_record}'
 ```
 
-Add the DKIM TXT record:
+**Or inside the backend container** (derive TXT from the DB):
+
+```bash
+docker compose exec backend python -c "
+import asyncio
+from sqlalchemy import select
+from backend.database import AsyncSessionLocal
+from backend.models import Domain
+from backend.services.domain_service import build_dkim_txt_record, dkim_txt_dns_name
+
+async def main():
+    async with AsyncSessionLocal() as db:
+        d = (await db.execute(select(Domain).order_by(Domain.created_at).limit(1))).scalar_one_or_none()
+        if not d:
+            print('No domain')
+            return
+        print('Zone:', d.name)
+        print('TXT name (under zone):', dkim_txt_dns_name(d))
+        print('TXT value:', build_dkim_txt_record(d))
+
+asyncio.run(main())
+"
+```
+
+Add the DKIM TXT record at your DNS host (for the **mail domain’s zone**, e.g. `yourdomain.com`):
 
 | Type | Name | Value |
 |------|------|-------|
-| `TXT` | `mail._domainkey` | `v=DKIM1; k=rsa; p=<YOUR_PUBLIC_KEY>` |
+| `TXT` | `mail._domainkey` | paste `dkim_txt_record` from the API (starts with `v=DKIM1; k=rsa; p=`…) |
 
-> Replace `mail` with your `DKIM_SELECTOR` value if you changed it.
+> Replace `mail` with `dkim_dns_name` from the API if you changed `DKIM_SELECTOR` in `.env` (default is `mail`).
+
+**Cloudflare token in “Assign domain admin”**
+
+Storing a Cloudflare API token only **resolves the zone ID** and sets `cloudflare_auto_dns` in the app. **This project does not yet push MX/SPF/DKIM/DMARC records to the Cloudflare API automatically** — you (or a future automation step) still create those records in the Cloudflare DNS UI (or API). Use **DNS Setup** / **Verify DNS** in the admin UI and the values from `GET /api/super-admin/domains/{id}/dns/guide` as needed.
 
 ### 5.5 DMARC Record
 
@@ -300,7 +334,9 @@ sudo certbot renew --dry-run
 
 ## 7. DKIM Key Setup
 
-DKIM keys are generated automatically when you add a domain via the super-admin UI or API.  To verify a key was generated:
+DKIM keys are generated when you **create** a domain via the super-admin UI or `POST /api/super-admin/domains` (older builds that inserted an empty domain row had no key — recreate the domain or restore keys from backup).
+
+**Verify a key exists and copy the TXT record:**
 
 ```bash
 # Connect to the DB and check
@@ -308,7 +344,9 @@ docker compose exec db psql -U nexmail -c \
   "SELECT name, dkim_selector, LEFT(dkim_private_key_encrypted, 20) AS key_preview FROM domains;"
 ```
 
-If no key is shown, generate one manually via the API:
+**Or use the API** — each domain includes `dkim_dns_name` and `dkim_txt_record` (see §5.4).
+
+Create the domain if needed:
 
 ```bash
 TOKEN=$(curl -s -X POST https://mail.yourdomain.com/api/auth/login \

@@ -27,20 +27,30 @@ async function request<T>(
   if (!res.ok) {
     const text = await res.text();
     let msg = `HTTP ${res.status}`;
+    let hasDetail = false;
     const ct = res.headers.get("content-type") ?? "";
     if (ct.includes("application/json")) {
-      try { msg = JSON.parse(text).detail ?? msg; } catch { /* ignore */ }
+      try {
+        const raw = JSON.parse(text).detail;
+        if (raw != null && raw !== "") {
+          msg = typeof raw === "string" ? raw : JSON.stringify(raw);
+          hasDetail = true;
+        }
+      } catch { /* ignore */ }
     } else if (!ct.includes("text/html")) {
-      msg = text || msg;
+      if (text) {
+        msg = text;
+        hasDetail = true;
+      }
     }
-    // Map common status codes to human-readable messages
+    // Map common status codes to human-readable messages (do not replace a parsed API detail)
     if (res.status === 401) msg = "Invalid email or password.";
     else if (res.status === 403) msg = "Access denied.";
     else if (res.status === 404) msg = "Service not found — is the backend running?";
     else if (res.status === 429) msg = "Too many attempts. Please wait and try again.";
-    else if (res.status === 504 || res.status === 502)
+    else if ((res.status === 504 || res.status === 502) && !hasDetail)
       msg = "Gateway timeout — API did not respond in time. On the server, check DATABASE_URL (host must be `postgres` in Docker), Postgres health, and `curl https://…/health/ready`.";
-    else if (res.status >= 500) msg = "Server error. Please try again later.";
+    else if (res.status >= 500 && !hasDetail) msg = "Server error. Please try again later.";
     throw new Error(msg);
   }
   const ct = res.headers.get("content-type") ?? "";
@@ -78,6 +88,15 @@ export const authApi = {
 // ─── Super Admin ──────────────────────────────────────────────────────────
 export const superAdminApi = {
   getStats: () => get<SuperAdminStats>("/api/super-admin/stats"),
+  getMailTestStatus: () =>
+    get<{
+      submission_configured: boolean;
+      host: string | null;
+      port: number | null;
+      from_hint: string | null;
+    }>("/api/super-admin/mail/test-status"),
+  sendTestMail: (to: string) =>
+    post<{ ok: boolean; detail: string | null }>("/api/super-admin/mail/test", { to }),
   getDomains: () => get<Domain[]>("/api/super-admin/domains"),
   createDomain: (name: string) => post<Domain>("/api/super-admin/domains", { name }),
   updateDomain: (id: string, data: Partial<Domain>) =>
@@ -91,6 +110,7 @@ export const superAdminApi = {
       ok: boolean;
       welcome_email_sent: boolean;
       welcome_email_error: string | null;
+      welcome_email_queued?: boolean;
     }>(`/api/super-admin/domains/${id}/assign-admin`, body),
   suspendDomain: (id: string, reason: string) =>
     post(`/api/super-admin/domains/${id}/suspend`, { reason }),

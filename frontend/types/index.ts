@@ -28,6 +28,10 @@ export interface Domain {
   used_storage_gb: number;
   dns_verified: boolean;
   dkim_selector: string;
+  /** DNS TXT record name under the apex zone, e.g. mail._domainkey */
+  dkim_dns_name?: string | null;
+  /** Full TXT value: v=DKIM1; k=rsa; p=... */
+  dkim_txt_record?: string | null;
   cloudflare_auto_dns: boolean;
   whitelabel_company_name?: string;
   whitelabel_primary_color: string;

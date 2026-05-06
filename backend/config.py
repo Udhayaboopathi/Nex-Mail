@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     super_admin_email: str = "admin@example.com"
     super_admin_password: str = "change-me"
+    # Authenticated SMTP submission (port 587) for super-admin "test mail" — avoids blocked outbound :25.
+    smtp_submission_host: str = ""
+    smtp_submission_port: int = 587
+    smtp_submission_user: str = ""
+    smtp_submission_password: str = ""
+    smtp_submission_use_tls: bool = True
+    smtp_test_mail_from: str = ""
     # When False, FastAPI skips Base.metadata.create_all on startup (use with Alembic).
     metadata_create_all_on_startup: bool = True
 

@@ -14,6 +14,10 @@ from backend.models import Domain, Mailbox, UnsubscribeList
 from backend.smtp.dkim import sign_message
 
 
+# Per-connection timeout so blocked outbound :25 does not hang the HTTP request indefinitely.
+SMTP_CLIENT_TIMEOUT = 25.0
+
+
 class SMTPDeliveryError(Exception):
     """Raised when SMTP direct delivery fails for all recipients."""
 
@@ -91,7 +95,15 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
         delivered = False
         for _, mx_host in mx_hosts:
             try:
-                await aiosmtplib.send(raw, sender=from_addr, recipients=[recipient], hostname=mx_host, port=25, start_tls=True)
+                await aiosmtplib.send(
+                    raw,
+                    sender=from_addr,
+                    recipients=[recipient],
+                    hostname=mx_host,
+                    port=25,
+                    start_tls=True,
+                    timeout=SMTP_CLIENT_TIMEOUT,
+                )
                 delivered = True
                 break
             except Exception:

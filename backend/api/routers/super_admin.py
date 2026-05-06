@@ -1,20 +1,32 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 
+from backend.api.deps import require_super_admin
 from backend.config import settings
 from backend.core.encryption import encrypt_value
 from backend.core.security import hash_password
 from backend.database import AsyncSessionLocal
 from backend.models import BackupJob, Domain, Mailbox, User
 from backend.services.backup_service import create_full_backup
-from backend.services.domain_service import fetch_cloudflare_zone_id, verify_dns
+from backend.services.domain_service import (
+    build_dkim_txt_record,
+    create_domain as provision_domain_with_dkim,
+    dkim_txt_dns_name,
+    fetch_cloudflare_zone_id,
+    verify_dns,
+)
 from backend.smtp.outbound import SMTPDeliveryError, send_direct
+from backend.smtp.submission_send import SubmissionSMTPError, send_via_submission
 
-router = APIRouter(tags=["super_admin"])
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["super_admin"], dependencies=[Depends(require_super_admin)])
 
 
 class SuperAdminStats(BaseModel):
@@ -34,6 +46,9 @@ class DomainItem(BaseModel):
     used_storage_gb: float
     dns_verified: bool
     dkim_selector: str
+    # Copy-paste for DNS: TXT name (under your domain zone) and full value.
+    dkim_dns_name: str | None = None
+    dkim_txt_record: str | None = None
     cloudflare_auto_dns: bool
     whitelabel_company_name: str | None = None
     whitelabel_primary_color: str
@@ -72,11 +87,55 @@ class AssignAdminResponse(BaseModel):
     ok: bool = True
     welcome_email_sent: bool = False
     welcome_email_error: str | None = None
+    # When True, welcome mail runs after HTTP returns (avoids UI hang if port 25 is slow/blocked).
+    welcome_email_queued: bool = False
+
+
+class TestMailRequest(BaseModel):
+    to: EmailStr
+
+
+class TestMailResponse(BaseModel):
+    ok: bool = True
+    detail: str | None = None
+
+
+class MailTestStatusResponse(BaseModel):
+    submission_configured: bool
+    host: str | None = None
+    port: int | None = None
+    from_hint: str | None = None
 
 
 def _is_consumer_gmail(email: str) -> bool:
     addr = email.lower().strip()
     return addr.endswith("@gmail.com") or addr.endswith("@googlemail.com")
+
+
+async def _send_assign_welcome_email(
+    email_norm: str,
+    domain_name: str,
+    login_url: str,
+    password: str,
+) -> None:
+    subject = f"Domain admin access for {domain_name}"
+    body_text = (
+        f"You have been assigned as domain administrator for {domain_name}.\n\n"
+        f"Login URL: {login_url}\n"
+        f"Login ID (email): {email_norm}\n"
+        f"Password: {password}\n\n"
+        "Please sign in and change your password after first login.\n"
+    )
+    from_addr = f"no-reply@{domain_name}"
+    try:
+        await send_direct(
+            from_addr=from_addr,
+            to_list=[email_norm],
+            subject=subject,
+            body_text=body_text,
+        )
+    except (SMTPDeliveryError, Exception) as exc:
+        logger.warning("Assign-admin welcome email failed for %s: %s", email_norm, exc)
 
 
 class BackupJobItem(BaseModel):
@@ -91,6 +150,7 @@ class BackupJobItem(BaseModel):
 
 
 def _domain_to_item(d: Domain) -> DomainItem:
+    dkim_txt = build_dkim_txt_record(d)
     return DomainItem(
         id=str(d.id),
         name=d.name,
@@ -101,6 +161,8 @@ def _domain_to_item(d: Domain) -> DomainItem:
         used_storage_gb=float(d.used_storage_gb or 0),
         dns_verified=bool(d.dns_verified),
         dkim_selector=d.dkim_selector or "mail",
+        dkim_dns_name=dkim_txt_dns_name(d) if dkim_txt else None,
+        dkim_txt_record=dkim_txt,
         cloudflare_auto_dns=bool(d.cloudflare_auto_dns),
         whitelabel_company_name=d.whitelabel_company_name,
         whitelabel_primary_color=d.whitelabel_primary_color or "#6366f1",
@@ -127,6 +189,63 @@ async def get_stats() -> SuperAdminStats:
     )
 
 
+@router.get("/mail/test-status", response_model=MailTestStatusResponse)
+async def mail_test_status() -> MailTestStatusResponse:
+    host = (settings.smtp_submission_host or "").strip()
+    user = (settings.smtp_submission_user or "").strip()
+    has_pw = bool(settings.smtp_submission_password)
+    configured = bool(host and user and has_pw)
+    from_hint = (settings.smtp_test_mail_from or "").strip() or settings.super_admin_email
+    return MailTestStatusResponse(
+        submission_configured=configured,
+        host=host or None,
+        port=settings.smtp_submission_port,
+        from_hint=from_hint or None,
+    )
+
+
+@router.post("/mail/test", response_model=TestMailResponse)
+async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
+    host = (settings.smtp_submission_host or "").strip()
+    user = (settings.smtp_submission_user or "").strip()
+    password = settings.smtp_submission_password
+    if not host or not user or not password:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "SMTP submission is not configured. Set SMTP_SUBMISSION_HOST, SMTP_SUBMISSION_USER, "
+                "and SMTP_SUBMISSION_PASSWORD on the server (see .env.example)."
+            ),
+        )
+    mail_from = (settings.smtp_test_mail_from or "").strip() or settings.super_admin_email
+    if not mail_from:
+        raise HTTPException(
+            status_code=400,
+            detail="Set SMTP_TEST_MAIL_FROM or SUPER_ADMIN_EMAIL as the From address.",
+        )
+    to_addr = str(payload.to).lower().strip()
+    subject = "Nex Mail — super-admin SMTP test"
+    body = (
+        "This is a test message sent from the Nex Mail super-admin panel.\n\n"
+        "If you received it, authenticated SMTP submission (typically port 587) is working.\n"
+    )
+    try:
+        await send_via_submission(
+            host=host,
+            port=int(settings.smtp_submission_port),
+            username=user,
+            password=password,
+            mail_from=mail_from,
+            mail_to=to_addr,
+            subject=subject,
+            body_text=body,
+            use_starttls=bool(settings.smtp_submission_use_tls),
+        )
+    except SubmissionSMTPError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return TestMailResponse(ok=True, detail="Message accepted by your SMTP server.")
+
+
 @router.get("/domains", response_model=list[DomainItem])
 async def list_domains() -> list[DomainItem]:
     async with AsyncSessionLocal() as db:
@@ -137,14 +256,14 @@ async def list_domains() -> list[DomainItem]:
 @router.post("/domains", response_model=DomainItem)
 async def create_domain(payload: CreateDomainRequest) -> DomainItem:
     name = payload.name.strip().lower()
+    try:
+        await provision_domain_with_dkim(name)
+    except ValueError as exc:
+        if "already exists" in str(exc).lower():
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     async with AsyncSessionLocal() as db:
-        exists = await db.scalar(select(Domain.id).where(Domain.name == name))
-        if exists:
-            raise HTTPException(status_code=409, detail="Domain already exists")
-        domain = Domain(name=name)
-        db.add(domain)
-        await db.commit()
-        await db.refresh(domain)
+        domain = (await db.execute(select(Domain).where(Domain.name == name))).scalar_one()
     return _domain_to_item(domain)
 
 
@@ -186,7 +305,11 @@ async def delete_domain(domain_id: str) -> dict[str, bool]:
 
 
 @router.post("/domains/{domain_id}/assign-admin", response_model=AssignAdminResponse)
-async def assign_admin(domain_id: str, payload: AssignAdminRequest) -> AssignAdminResponse:
+async def assign_admin(
+    domain_id: str,
+    payload: AssignAdminRequest,
+    background_tasks: BackgroundTasks,
+) -> AssignAdminResponse:
     try:
         domain_uuid = UUID(domain_id)
     except ValueError as exc:
@@ -195,6 +318,7 @@ async def assign_admin(domain_id: str, payload: AssignAdminRequest) -> AssignAdm
     email_norm = str(payload.email).lower().strip()
     welcome_sent = False
     welcome_err: str | None = None
+    welcome_queued = False
 
     async with AsyncSessionLocal() as db:
         domain = (await db.execute(select(Domain).where(Domain.id == domain_uuid))).scalar_one_or_none()
@@ -228,29 +352,24 @@ async def assign_admin(domain_id: str, payload: AssignAdminRequest) -> AssignAdm
         domain_name = domain.name
 
     # Send plaintext credentials only to Gmail / GoogleMail (explicit product choice).
+    # Run in background so Cloudflare + DB commit return quickly; direct MX can block on port 25.
     if _is_consumer_gmail(email_norm):
         login_url = str(settings.frontend_url).rstrip("/") + "/login"
-        subject = f"Domain admin access for {domain_name}"
-        body_text = (
-            f"You have been assigned as domain administrator for {domain_name}.\n\n"
-            f"Login URL: {login_url}\n"
-            f"Login ID (email): {email_norm}\n"
-            f"Password: {payload.password}\n\n"
-            "Please sign in and change your password after first login.\n"
+        background_tasks.add_task(
+            _send_assign_welcome_email,
+            email_norm,
+            domain_name,
+            login_url,
+            payload.password,
         )
-        from_addr = f"no-reply@{domain_name}"
-        try:
-            await send_direct(
-                from_addr=from_addr,
-                to_list=[email_norm],
-                subject=subject,
-                body_text=body_text,
-            )
-            welcome_sent = True
-        except (SMTPDeliveryError, Exception) as exc:
-            welcome_err = str(exc)
+        welcome_queued = True
 
-    return AssignAdminResponse(ok=True, welcome_email_sent=welcome_sent, welcome_email_error=welcome_err)
+    return AssignAdminResponse(
+        ok=True,
+        welcome_email_sent=welcome_sent,
+        welcome_email_error=welcome_err,
+        welcome_email_queued=welcome_queued,
+    )
 
 
 @router.post("/domains/{domain_id}/suspend")
