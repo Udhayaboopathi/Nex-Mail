@@ -32,7 +32,7 @@ services:
       - "traefik.docker.network=traefik-public"
       # HTTP → HTTPS redirect handled by Traefik entryPoint redirect
       # HTTPS router for /api and /health
-      - "traefik.http.routers.backend-api.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/health`))"
+      - "traefik.http.routers.backend-api.rule=PathPrefix(`/api`) || Path(`/health`)"
       - "traefik.http.routers.backend-api.entrypoints=websecure"
       - "traefik.http.routers.backend-api.tls=true"
       - "traefik.http.routers.backend-api.priority=100"
