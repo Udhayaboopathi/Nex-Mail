@@ -74,6 +74,11 @@ def _generate_self_signed(hostname: str = "mail.localhost") -> tuple[str, str]:
     return cert_file, key_file
 
 
+def _submission_auth_callback(_mechanism: str, _login: bytes, _password: bytes) -> bool:
+    """Accept any credentials until real mailbox auth is implemented for port 587."""
+    return True
+
+
 def _build_tls_context() -> ssl.SSLContext:
     """
     Return an SSLContext loaded with real Let's Encrypt certs if available,
@@ -108,7 +113,9 @@ async def create_smtp_servers():
         port=587,
         require_starttls=True,
         tls_context=tls_ctx,
+        auth_required=True,
         auth_require_tls=True,
+        auth_callback=_submission_auth_callback,
     )
 
     c1.start()

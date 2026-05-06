@@ -95,13 +95,8 @@ class InboundHandler:
 
 
 class SubmissionHandler(InboundHandler):
-    async def handle_AUTH(self, _server, _session, _envelope, mechanism, _auth_data):
-        if mechanism not in {"PLAIN", "LOGIN"}:
-            return "504 unsupported authentication mechanism"
-        return "235 2.7.0 Authentication successful"
+    """Port 587 submission — do not override EHLO: aiosmtpd merges capabilities; a custom
+    EHLO that re-appends AUTH/STARTTLS/SIZE breaks the response and confuses clients
+    (e.g. aiosmtplib raises on a malformed multiline 250)."""
 
-    async def handle_EHLO(self, _server, _session, _envelope, _hostname, responses):
-        responses.append("250-AUTH LOGIN PLAIN")
-        responses.append("250-STARTTLS")
-        responses.append("250 SIZE 26214400")
-        return responses
+    pass
