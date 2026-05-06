@@ -23,7 +23,8 @@ async def send_via_submission(
     subject: str,
     body_text: str,
     use_starttls: bool = True,
-    timeout: float = 30.0,
+    timeout: float = 60.0,
+    validate_certs: bool = True,
 ) -> None:
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -42,6 +43,7 @@ async def send_via_submission(
             password=password,
             start_tls=use_starttls,
             timeout=timeout,
+            validate_certs=validate_certs,
         )
     except Exception as exc:
         parts: list[str] = [f"{type(exc).__name__}: {exc}"]

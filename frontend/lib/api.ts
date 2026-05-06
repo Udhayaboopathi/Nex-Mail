@@ -94,6 +94,7 @@ export const superAdminApi = {
       host: string | null;
       port: number | null;
       from_hint: string | null;
+      submission_tcp_target: string | null;
       outbound_relay_configured: boolean;
       outbound_relay_host: string | null;
       outbound_relay_port: number | null;

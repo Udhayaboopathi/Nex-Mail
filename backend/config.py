@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     smtp_submission_user: str = ""
     smtp_submission_password: str = ""
     smtp_submission_use_tls: bool = True
+    # TCP target for aiosmtplib (default: same as SMTP_SUBMISSION_HOST). Use 127.0.0.1 in Docker when
+    # the public hostname does not hairpin to this container's :587 (avoids "Timed out waiting for server response").
+    smtp_submission_connect_host: str = ""
+    smtp_submission_tls_insecure: bool = False  # If True, skip TLS cert verification (e.g. IP vs cert name).
     smtp_test_mail_from: str = ""
     # After direct MX :25 fails (common when VPS blocks outbound 25), relay via this host (587 + AUTH).
     smtp_outbound_relay_host: str = ""

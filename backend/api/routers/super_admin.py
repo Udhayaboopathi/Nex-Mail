@@ -29,6 +29,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["super_admin"], dependencies=[Depends(require_super_admin)])
 
 
+def _submission_tcp_host() -> str:
+    """SMTP client TCP target; may differ from logical SMTP_SUBMISSION_HOST (Docker hairpin)."""
+    conn = (settings.smtp_submission_connect_host or "").strip()
+    if conn:
+        return conn
+    return (settings.smtp_submission_host or "").strip()
+
+
+def _submission_validate_certs_for_tcp(tcp_host: str) -> bool:
+    if settings.smtp_submission_tls_insecure:
+        return False
+    h = tcp_host.strip().lower()
+    if h in ("127.0.0.1", "localhost", "::1"):
+        return False
+    return True
+
+
 class SuperAdminStats(BaseModel):
     total_domains: int
     active_domains: int
@@ -105,6 +122,8 @@ class MailTestStatusResponse(BaseModel):
     host: str | None = None
     port: int | None = None
     from_hint: str | None = None
+    # Actual TCP connect target (SMTP_SUBMISSION_CONNECT_HOST or SMTP_SUBMISSION_HOST).
+    submission_tcp_target: str | None = None
     outbound_relay_configured: bool = False
     outbound_relay_host: str | None = None
     outbound_relay_port: int | None = None
@@ -155,8 +174,9 @@ async def _send_assign_welcome_email(
             or from_addr
         )
         try:
+            tcp = _submission_tcp_host()
             await send_via_submission(
-                host=sub_host,
+                host=tcp,
                 port=int(settings.smtp_submission_port),
                 username=sub_user,
                 password=(settings.smtp_submission_password or "").strip() or "unused",
@@ -165,6 +185,7 @@ async def _send_assign_welcome_email(
                 subject=subject,
                 body_text=body_text,
                 use_starttls=bool(settings.smtp_submission_use_tls),
+                validate_certs=_submission_validate_certs_for_tcp(tcp),
             )
             logger.info("Assign-admin welcome email for %s delivered via SMTP submission (%s)", email_norm, sub_host)
         except SubmissionSMTPError as sub_exc:
@@ -235,11 +256,13 @@ async def mail_test_status() -> MailTestStatusResponse:
     configured = bool(host and user)
     from_hint = (settings.smtp_test_mail_from or "").strip() or settings.super_admin_email
     relay_host = (settings.smtp_outbound_relay_host or "").strip()
+    tcp_target = _submission_tcp_host() if configured else ""
     return MailTestStatusResponse(
         submission_configured=configured,
         host=host or None,
         port=settings.smtp_submission_port,
         from_hint=from_hint or None,
+        submission_tcp_target=tcp_target or None,
         outbound_relay_configured=bool(relay_host),
         outbound_relay_host=relay_host or None,
         outbound_relay_port=int(settings.smtp_outbound_relay_port) if relay_host else None,
@@ -271,9 +294,10 @@ async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
         "This is a test message sent from the Nex Mail super-admin panel.\n\n"
         "If you received it, authenticated SMTP submission (typically port 587) is working.\n"
     )
+    tcp = _submission_tcp_host()
     try:
         await send_via_submission(
-            host=host,
+            host=tcp,
             port=int(settings.smtp_submission_port),
             username=user,
             password=password,
@@ -282,9 +306,16 @@ async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
             subject=subject,
             body_text=body,
             use_starttls=bool(settings.smtp_submission_use_tls),
+            validate_certs=_submission_validate_certs_for_tcp(tcp),
         )
     except SubmissionSMTPError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        msg = str(exc)
+        if "timed out" in msg.lower():
+            msg += (
+                " Common fix in Docker: set SMTP_SUBMISSION_CONNECT_HOST=127.0.0.1 when "
+                "SMTP_SUBMISSION_HOST is your public name (many hosts cannot hairpin to their own :587)."
+            )
+        raise HTTPException(status_code=502, detail=msg) from exc
     return TestMailResponse(ok=True, detail="Message accepted by your SMTP server.")
 
 

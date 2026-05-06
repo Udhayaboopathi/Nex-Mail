@@ -11,6 +11,7 @@ export default function SuperAdminSettings() {
     host: string | null;
     port: number | null;
     from_hint: string | null;
+    submission_tcp_target: string | null;
     outbound_relay_configured: boolean;
     outbound_relay_host: string | null;
     outbound_relay_port: number | null;
@@ -75,9 +76,11 @@ export default function SuperAdminSettings() {
         <p className="text-sm text-gray-500 dark:text-gray-400">
           Uses <strong>authenticated SMTP</strong> (port 587 + STARTTLS by default), not direct MX on port 25. Configure{" "}
           <code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 rounded">SMTP_SUBMISSION_*</code> on the backend host,
-          then send a message to any inbox you control. If users cannot receive mail from your server because outbound port 25
-          is blocked, set <code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 rounded">SMTP_OUTBOUND_RELAY_*</code> for
-          MX delivery fallback.
+          then send a message to any inbox you control. On Docker, set{" "}
+          <code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 rounded">SMTP_SUBMISSION_CONNECT_HOST=127.0.0.1</code>{" "}
+          if tests time out while using your public mail hostname. If users cannot receive mail from your server because outbound
+          port 25 is blocked, set <code className="text-xs bg-gray-100 dark:bg-gray-800 px-1 rounded">SMTP_OUTBOUND_RELAY_*</code>{" "}
+          for MX delivery fallback.
         </p>
         {loadingStatus ? (
           <p className="text-sm text-gray-500">Loading mail configuration…</p>
@@ -92,6 +95,14 @@ export default function SuperAdminSettings() {
                 </>
               ) : null}
             </div>
+            {status.submission_tcp_target &&
+            status.host &&
+            status.submission_tcp_target !== status.host ? (
+              <div className="text-emerald-700 dark:text-emerald-300">
+                TCP connect: <span className="font-mono">{status.submission_tcp_target}:{status.port}</span> (logical:{" "}
+                <span className="font-mono">{status.host}</span>)
+              </div>
+            ) : null}
             {status.outbound_relay_configured && status.outbound_relay_host ? (
               <div className="text-emerald-700 dark:text-emerald-300">
                 Outbound relay (MX fallback):{" "}
@@ -107,8 +118,9 @@ export default function SuperAdminSettings() {
             <code className="text-xs">SMTP_SUBMISSION_HOST</code> and <code className="text-xs">SMTP_SUBMISSION_USER</code>.
             Add <code className="text-xs">SMTP_SUBMISSION_PASSWORD</code> for external SMTP (optional for self-hosted Nex Mail on :587).
             Optional: <code className="text-xs">SMTP_TEST_MAIL_FROM</code>, <code className="text-xs">SMTP_SUBMISSION_PORT</code>,{" "}
-            <code className="text-xs">SMTP_SUBMISSION_USE_TLS</code>. For blocked outbound port 25, add{" "}
-            <code className="text-xs">SMTP_OUTBOUND_RELAY_*</code>. Copy the same <code className="text-xs">.env</code> to the VPS and{" "}
+            <code className="text-xs">SMTP_SUBMISSION_USE_TLS</code>.             Use <code className="text-xs">SMTP_SUBMISSION_CONNECT_HOST=127.0.0.1</code> on Docker if the test times out. For blocked
+            outbound port 25, add <code className="text-xs">SMTP_OUTBOUND_RELAY_*</code>. Copy the same <code className="text-xs">.env</code>{" "}
+            to the VPS and{" "}
             <strong>restart the backend</strong> (<code className="text-xs">docker compose up -d --force-recreate backend</code>).
           </div>
         )}
