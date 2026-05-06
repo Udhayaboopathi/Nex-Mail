@@ -134,8 +134,43 @@ async def _send_assign_welcome_email(
             subject=subject,
             body_text=body_text,
         )
-    except (SMTPDeliveryError, Exception) as exc:
-        logger.warning("Assign-admin welcome email failed for %s: %s", email_norm, exc)
+        return
+    except (SMTPDeliveryError, Exception) as direct_exc:
+        sub_host = (settings.smtp_submission_host or "").strip()
+        sub_user = (settings.smtp_submission_user or "").strip()
+        if not sub_host or not sub_user:
+            logger.warning(
+                "Assign-admin welcome email failed for %s (direct MX blocked or unreachable; "
+                "set SMTP_SUBMISSION_HOST and SMTP_SUBMISSION_USER for port 587 fallback): %s",
+                email_norm,
+                direct_exc,
+            )
+            return
+        mail_from = (
+            (settings.smtp_test_mail_from or "").strip()
+            or settings.super_admin_email
+            or from_addr
+        )
+        try:
+            await send_via_submission(
+                host=sub_host,
+                port=int(settings.smtp_submission_port),
+                username=sub_user,
+                password=(settings.smtp_submission_password or "").strip() or "unused",
+                mail_from=mail_from,
+                mail_to=email_norm,
+                subject=subject,
+                body_text=body_text,
+                use_starttls=bool(settings.smtp_submission_use_tls),
+            )
+            logger.info("Assign-admin welcome email for %s delivered via SMTP submission (%s)", email_norm, sub_host)
+        except SubmissionSMTPError as sub_exc:
+            logger.warning(
+                "Assign-admin welcome email failed for %s (direct MX: %s; submission: %s)",
+                email_norm,
+                direct_exc,
+                sub_exc,
+            )
 
 
 class BackupJobItem(BaseModel):
