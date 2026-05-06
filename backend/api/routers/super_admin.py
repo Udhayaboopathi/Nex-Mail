@@ -21,7 +21,7 @@ from backend.services.domain_service import (
     fetch_cloudflare_zone_id,
     verify_dns,
 )
-from backend.smtp.outbound import SMTPDeliveryError, send_direct
+from backend.smtp.outbound import SMTPDeliveryError, outbound_relay_uses_implicit_tls, send_direct
 from backend.smtp.submission_send import SubmissionSMTPError, send_via_submission
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,14 @@ def _mail_test_sends_via() -> str | None:
     if _local_submission_ready():
         return "local_submission"
     return None
+
+
+def _smtp_connect_timeout_hint() -> str:
+    return (
+        " Outbound SMTP may be blocked (587 is often filtered). Try SMTP_OUTBOUND_RELAY_PORT=2525 with Brevo, "
+        "or port 465 with SMTP_OUTBOUND_RELAY_IMPLICIT_TLS=true (465 enables implicit TLS automatically). "
+        "Test from the VPS: nc -zv smtp-relay.brevo.com 587 && nc -zv smtp-relay.brevo.com 2525 && nc -zv smtp-relay.brevo.com 465"
+    )
 
 
 class SuperAdminStats(BaseModel):
@@ -340,6 +348,7 @@ async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
 
     # Prefer transactional relay for this test: same path as real outbound, no local aiosmtpd hop.
     if relay_ready:
+        implicit = outbound_relay_uses_implicit_tls()
         try:
             await send_via_submission(
                 host=relay_h,
@@ -350,7 +359,8 @@ async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
                 mail_to=to_addr,
                 subject=subject,
                 body_text=body,
-                use_starttls=bool(settings.smtp_outbound_relay_use_tls),
+                use_starttls=bool(settings.smtp_outbound_relay_use_tls) and not implicit,
+                implicit_tls=implicit,
                 validate_certs=True,
             )
         except SubmissionSMTPError as exc:
@@ -363,6 +373,8 @@ async def send_test_mail(payload: TestMailRequest) -> TestMailResponse:
                 to_addr,
                 msg,
             )
+            if "Timed out connecting" in msg or "SMTPConnectTimeoutError" in msg:
+                msg += _smtp_connect_timeout_hint()
             raise HTTPException(status_code=502, detail=msg) from exc
         return TestMailResponse(
             ok=True,

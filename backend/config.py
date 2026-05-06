@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     smtp_outbound_relay_user: str = ""
     smtp_outbound_relay_password: str = ""
     smtp_outbound_relay_use_tls: bool = True
+    # Port 465 uses implicit TLS (SMTPS). Set True if you use 465 or a host that requires SSL from connect.
+    smtp_outbound_relay_implicit_tls: bool = False
     # When False, FastAPI skips Base.metadata.create_all on startup (use with Alembic).
     metadata_create_all_on_startup: bool = True
 

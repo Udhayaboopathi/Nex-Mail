@@ -34,18 +34,30 @@ def _smtp_delivery_hint() -> str:
     )
 
 
+def outbound_relay_uses_implicit_tls() -> bool:
+    if bool(getattr(settings, 'smtp_outbound_relay_implicit_tls', False)):
+        return True
+    return int(settings.smtp_outbound_relay_port) == 465
+
+
 async def _try_outbound_smarthost(mail_from: str, recipient: str, raw: bytes) -> bool:
     host = (settings.smtp_outbound_relay_host or '').strip()
     if not host:
         return False
     user = (settings.smtp_outbound_relay_user or '').strip()
     pw = settings.smtp_outbound_relay_password or ''
+    port = int(settings.smtp_outbound_relay_port)
+    implicit = outbound_relay_uses_implicit_tls()
     kwargs: dict = {
         'hostname': host,
-        'port': int(settings.smtp_outbound_relay_port),
-        'start_tls': bool(settings.smtp_outbound_relay_use_tls),
+        'port': port,
         'timeout': SMTP_CLIENT_TIMEOUT,
     }
+    if implicit:
+        kwargs['use_tls'] = True
+        kwargs['start_tls'] = False
+    else:
+        kwargs['start_tls'] = bool(settings.smtp_outbound_relay_use_tls)
     if user:
         kwargs['username'] = user
         kwargs['password'] = pw

@@ -23,6 +23,7 @@ async def send_via_submission(
     subject: str,
     body_text: str,
     use_starttls: bool = True,
+    implicit_tls: bool = False,
     timeout: float = 60.0,
     validate_certs: bool = True,
 ) -> None:
@@ -35,16 +36,29 @@ async def send_via_submission(
     msg.set_content(body_text)
 
     try:
-        await aiosmtplib.send(
-            msg,
-            hostname=host.strip(),
-            port=port,
-            username=username.strip(),
-            password=password,
-            start_tls=use_starttls,
-            timeout=timeout,
-            validate_certs=validate_certs,
-        )
+        if implicit_tls:
+            await aiosmtplib.send(
+                msg,
+                hostname=host.strip(),
+                port=port,
+                username=username.strip(),
+                password=password,
+                use_tls=True,
+                start_tls=False,
+                timeout=timeout,
+                validate_certs=validate_certs,
+            )
+        else:
+            await aiosmtplib.send(
+                msg,
+                hostname=host.strip(),
+                port=port,
+                username=username.strip(),
+                password=password,
+                start_tls=use_starttls,
+                timeout=timeout,
+                validate_certs=validate_certs,
+            )
     except Exception as exc:
         parts: list[str] = [f"{type(exc).__name__}: {exc}"]
         code = getattr(exc, "smtp_code", None)
