@@ -1,0 +1,83 @@
+# ─── Environment ──────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ─── Python / Backend ─────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+*.virtualenv
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ─── Alembic ──────────────────────────────────────────────────────────────────
+backend/alembic/versions/*.pyc
+
+# ─── Node / Frontend ──────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/.vercel/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.pnpm-debug.log*
+
+# ─── Docker ───────────────────────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ─── Traefik / TLS ────────────────────────────────────────────────────────────
+traefik/acme/acme.json
+infra/mail-certs/*.pem
+infra/mail-certs/*.key
+infra/mail-certs/*.crt
+
+# ─── Mail data / Maildir ──────────────────────────────────────────────────────
+maildata/
+maildir/
+
+# ─── Backups ──────────────────────────────────────────────────────────────────
+backups/
+*.tar.gz
+*.tar.bz2
+*.zip
+*.sql.gz
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── IDE ──────────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── Secrets ──────────────────────────────────────────────────────────────────
+*.pem
+*.key
+*.p12
+*.pfx
+dkim_private.pem

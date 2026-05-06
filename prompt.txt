@@ -1,0 +1,1885 @@
+You are a senior full-stack engineer. Build a complete, production-ready,
+self-hosted email platform from absolute scratch. No Mailcow. No third-party
+email services. Every line of code written by you.
+
+Read every requirement below carefully before writing a single file.
+Generate every file completely — no stubs, no TODOs, no placeholders.
+
+===================================================================
+INFRASTRUCTURE DECISION — TRAEFIK REPLACES NGINX
+===================================================================
+
+Use Traefik v3 as the reverse proxy and TLS termination layer.
+Traefik replaces Nginx entirely. No nginx.conf file needed.
+
+Why Traefik:
+- Automatic Let's Encrypt certificate provisioning and renewal
+- Docker-native: reads labels from docker-compose.yml
+- No manual cert copy steps needed
+- Hot-reload: no container restart needed for config changes
+- Built-in dashboard for monitoring routes
+- Automatic HTTP → HTTPS redirect via entrypoints
+
+Traefik handles:
+- Port 80  → redirect to 443
+- Port 443 → TLS termination via Let's Encrypt
+- Route /api/* → backend:8000
+- Route /      → frontend:3000
+- Route /api/track/* → backend:8000 (no cache headers)
+
+Traefik does NOT handle mail ports — those are direct:
+- Port 25  → backend container (SMTP inbound)
+- Port 587 → backend container (SMTP submission)
+- Port 993 → backend container (IMAP SSL)
+
+===================================================================
+PLATFORM SUMMARY
+===================================================================
+
+Name:     Nex Mail
+Server:    Ubuntu 24.04
+Roles:    super_admin → domain_admin → user
+Backend:  Single unified Python process (SMTP + IMAP + REST API)
+Frontend: Single Next.js app serving all three roles
+Database: PostgreSQL 16
+Queue:    Celery + Redis
+Proxy:    Traefik v3 (automatic TLS, Docker labels)
+Containers: Docker Compose (11 services)
+
+===================================================================
+COMPLETE TECH STACK
+===================================================================
+
+Protocol servers:
+  SMTP inbound:    aiosmtpd, port 25
+  SMTP submission: aiosmtpd, port 587, AUTH + STARTTLS
+  IMAP:            Custom asyncio, port 993, TLS from connect
+
+Backend:
+  Framework:    FastAPI 
+  ORM:          SQLAlchemy 2.0 async + asyncpg
+  Migrations:   Alembic
+  Validation:   Pydantic v2
+  Auth:         JWT (HS256) + bcrypt
+  2FA:          pyotp (TOTP)
+  PGP:          pgpy
+  DKIM:         dkimpy
+  DNS:          dnspython
+  SPF:          pyspf
+  Encryption:   cryptography (Fernet)
+  HTTP client:  httpx async
+  Calendar:     icalendar
+  Rate limit:   slowapi
+  Tasks:        celery[redis]
+
+Frontend:
+  Framework:  Next.js 14 (App Router, TypeScript)
+  Styling:    Tailwind CSS (darkMode: class)
+  State:      Zustand + TanStack Query
+  Editor:     TipTap
+  Notes:      @uiw/react-md-editor
+  Icons:      lucide-react
+  Sanitise:   DOMPurify
+
+Infrastructure:
+  Reverse proxy: Traefik v3 (Docker labels, auto TLS)
+  SSL:           Let's Encrypt (Traefik ACME, auto-renew)
+  Spam:          SpamAssassin (Docker sidecar)
+  Antivirus:     ClamAV (Docker sidecar)
+  Brute-force:   Fail2ban (host network)
+
+===================================================================
+PROJECT FILE STRUCTURE — GENERATE EVERY FILE
+===================================================================
+
+email-platform/
+├── .env.example
+├── .env
+├── docker-compose.yml          ← Traefik labels on services
+├── Makefile
+├── README.md
+│
+├── traefik/
+│   ├── traefik.yml             ← static config
+│   ├── dynamic/
+│   │   └── middlewares.yml     ← security headers, rate limit
+│   └── acme/
+│       └── .gitkeep            ← Let's Encrypt cert storage
+│
+├── infra/
+│   ├── spamassassin/local.cf
+│   ├── clamav/clamd.conf
+│   ├── fail2ban/jail.local
+│   └── dkim/generate_keys.sh
+│
+├── backend/
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── main.py
+│   ├── config.py
+│   ├── database.py
+│   ├── core/
+│   │   ├── encryption.py
+│   │   ├── security.py
+│   │   └── ip_geo.py
+│   ├── models/          (34 model files — listed in generation order)
+│   ├── schemas/         (18 schema files)
+│   ├── smtp/
+│   │   ├── server.py
+│   │   ├── handler.py
+│   │   ├── outbound.py
+│   │   └── dkim.py
+│   ├── imap/
+│   │   ├── server.py
+│   │   ├── session.py
+│   │   ├── maildir.py
+│   │   └── commands/    (10 command files)
+│   ├── services/        (15 service files)
+│   ├── api/
+│   │   ├── deps.py
+│   │   ├── middleware/
+│   │   │   ├── rate_limit.py
+│   │   │   └── audit.py
+│   │   └── routers/     (24 router files)
+│   ├── tasks/           (9 task files)
+│   ├── alembic/
+│   │   ├── env.py
+│   │   └── versions/0001_initial.py
+│   └── seed.py
+│
+└── frontend/
+    ├── Dockerfile
+    ├── package.json
+    ├── tsconfig.json
+    ├── tailwind.config.ts
+    ├── next.config.ts
+    ├── public/
+    │   ├── manifest.json
+    │   ├── sw.js
+    │   ├── icon-192.png
+    │   └── icon-512.png
+    ├── app/             (all pages)
+    ├── components/      (all components)
+    ├── lib/
+    │   ├── api.ts
+    │   ├── auth.ts
+    │   └── utils.ts
+    ├── hooks/
+    ├── store/index.ts
+    └── types/index.ts
+
+===================================================================
+SECTION 1 — ENVIRONMENT FILE (.env.example)
+===================================================================
+
+# ── Traefik / Domain ──────────────────────────────────────────
+DOMAIN=yourdomain.com
+ACME_EMAIL=admin@yourdomain.com
+TRAEFIK_DASHBOARD_ENABLED=false
+TRAEFIK_DASHBOARD_USER=admin
+# Generate: echo $(htpasswd -nB admin) | sed -e s/\\$/\\$\\$/g
+TRAEFIK_DASHBOARD_PASSWORD_HASH=$$2y$$10$$...
+
+# ── Server ────────────────────────────────────────────────────
+SERVER_IP=YOUR_CONTABO_IP
+SMTP_HOSTNAME=mail.yourdomain.com
+
+# ── Database ──────────────────────────────────────────────────
+DATABASE_URL=postgresql+asyncpg://emailuser:password@postgres:5432/emaildb
+POSTGRES_DB=emaildb
+POSTGRES_USER=emailuser
+POSTGRES_PASSWORD=change-this-strong-password
+
+# ── Redis ─────────────────────────────────────────────────────
+REDIS_URL=redis://redis:6379/0
+
+# ── JWT ───────────────────────────────────────────────────────
+JWT_SECRET_KEY=replace-with-256-bit-random-secret
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+REFRESH_TOKEN_EXPIRE_DAYS=30
+
+# ── Encryption ────────────────────────────────────────────────
+ENCRYPTION_SECRET_KEY=replace-with-32-byte-base64-secret
+
+# ── Mail ──────────────────────────────────────────────────────
+MAILDIR_BASE=/var/mail
+MAX_MESSAGE_SIZE_MB=25
+DKIM_SELECTOR=mail
+
+# ── Cloudflare ────────────────────────────────────────────────
+CLOUDFLARE_API_TOKEN=optional-global-fallback-token
+
+# ── Backup ────────────────────────────────────────────────────
+BACKUP_PASSPHRASE=optional-encrypt-backups
+BACKUP_RETENTION_DAYS=7
+BACKUP_SCHEDULE_HOUR=2
+
+# ── Seed ──────────────────────────────────────────────────────
+SUPER_ADMIN_EMAIL=admin@yourdomain.com
+SUPER_ADMIN_PASSWORD=change-immediately
+
+# ── Frontend ──────────────────────────────────────────────────
+FRONTEND_URL=https://yourdomain.com
+INVITE_BASE_URL=https://yourdomain.com
+NEXT_PUBLIC_API_URL=https://yourdomain.com
+
+# ── AI ────────────────────────────────────────────────────────
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+AI_SUMMARY_ENABLED=true
+AI_SMART_REPLY_ENABLED=true
+AI_PRIORITY_INBOX_ENABLED=true
+
+# ── Tracking ──────────────────────────────────────────────────
+TRACKING_BASE_URL=https://yourdomain.com/track
+TRACKING_ENABLED=true
+
+# ── Spam / AV ─────────────────────────────────────────────────
+SPAMASSASSIN_HOST=spamassassin
+CLAMAV_HOST=clamav
+
+===================================================================
+SECTION 2 — TRAEFIK CONFIG
+===================================================================
+
+File: traefik/traefik.yml (static configuration)
+
+api:
+  dashboard: true
+  insecure: false
+
+log:
+  level: INFO
+
+accessLog:
+  filePath: /var/log/traefik/access.log
+  bufferingSize: 100
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
+      middlewares:
+        - security-headers@file
+  metrics:
+    address: ":8082"
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: "REPLACE_WITH_ACME_EMAIL"
+      storage: /acme/acme.json
+      httpChallenge:
+        entryPoint: web
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: traefik-public
+  file:
+    directory: /dynamic
+    watch: true
+
+metrics:
+  prometheus:
+    entryPoint: metrics
+
+File: traefik/dynamic/middlewares.yml
+
+http:
+  middlewares:
+
+    security-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        frameDeny: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: no-referrer-when-downgrade
+        customResponseHeaders:
+          X-Robots-Tag: noindex,nofollow
+
+    no-cache:
+      headers:
+        customResponseHeaders:
+          Cache-Control: no-store, no-cache, must-revalidate
+          Pragma: no-cache
+
+    compress:
+      compress:
+        excludedContentTypes:
+          - text/event-stream
+
+    rate-limit-api:
+      rateLimit:
+        average: 100
+        burst: 50
+        period: 1m
+
+    rate-limit-auth:
+      rateLimit:
+        average: 5
+        burst: 10
+        period: 1m
+
+    rate-limit-tracking:
+      rateLimit:
+        average: 500
+        burst: 200
+        period: 1m
+
+    dashboard-auth:
+      basicAuth:
+        users:
+          - "REPLACE_WITH_HTPASSWD_HASH"
+
+===================================================================
+SECTION 3 — DOCKER COMPOSE (Traefik-native)
+===================================================================
+
+Generate complete docker-compose.yml:
+
+networks:
+  traefik-public:
+    external: false
+  internal:
+    external: false
+
+volumes:
+  postgres_data:
+  redis_data:
+  maildata:
+  clamav_data:
+  traefik_acme:
+  traefik_logs:
+
+x-backend-env: &backend-env
+  DATABASE_URL: ${DATABASE_URL}
+  REDIS_URL: ${REDIS_URL}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+  ENCRYPTION_SECRET_KEY: ${ENCRYPTION_SECRET_KEY}
+  MAILDIR_BASE: ${MAILDIR_BASE}
+  SERVER_IP: ${SERVER_IP}
+  SMTP_HOSTNAME: ${SMTP_HOSTNAME}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  SPAMASSASSIN_HOST: ${SPAMASSASSIN_HOST}
+  CLAMAV_HOST: ${CLAMAV_HOST}
+  FRONTEND_URL: ${FRONTEND_URL}
+  INVITE_BASE_URL: ${INVITE_BASE_URL}
+  TRACKING_BASE_URL: ${TRACKING_BASE_URL}
+  TRACKING_ENABLED: ${TRACKING_ENABLED}
+  MAX_MESSAGE_SIZE_MB: ${MAX_MESSAGE_SIZE_MB}
+  DKIM_SELECTOR: ${DKIM_SELECTOR}
+  BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE}
+  BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS}
+  AI_SUMMARY_ENABLED: ${AI_SUMMARY_ENABLED}
+  AI_SMART_REPLY_ENABLED: ${AI_SMART_REPLY_ENABLED}
+  AI_PRIORITY_INBOX_ENABLED: ${AI_PRIORITY_INBOX_ENABLED}
+  CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+  DOMAIN: ${DOMAIN}
+
+services:
+
+  # ── Traefik ──────────────────────────────────────────────────
+  traefik:
+    image: traefik:v3.1
+    restart: unless-stopped
+    networks:
+      - traefik-public
+      - internal
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8082:8082"     # metrics (internal only — bind to 127.0.0.1 in prod)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/traefik.yml:ro
+      - ./traefik/dynamic:/dynamic:ro
+      - traefik_acme:/acme
+      - traefik_logs:/var/log/traefik
+    environment:
+      - ACME_EMAIL=${ACME_EMAIL}
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "traefik.enable=true"
+      # Dashboard (protected by basicAuth middleware)
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${DOMAIN}`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.middlewares=dashboard-auth@file"
+      - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
+
+  # ── PostgreSQL ───────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks:
+      - internal
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - internal
+    volumes:
+      - redis_data:/data
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── Backend (SMTP + IMAP + API) ───────────────────────────────
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    networks:
+      - traefik-public
+      - internal
+    ports:
+      - "25:25"         # SMTP inbound (Traefik does NOT proxy mail ports)
+      - "587:587"       # SMTP submission
+      - "993:993"       # IMAP SSL
+    expose:
+      - "8000"          # API — only Traefik can reach this
+    volumes:
+      - maildata:/var/mail
+      - ./infra/dkim:/etc/dkim:ro
+    environment:
+      <<: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      spamassassin:
+        condition: service_started
+      clamav:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=email-platform_traefik-public"
+
+      # ── Tracking pixel routes (public, no-cache, high rate limit) ──
+      - "traefik.http.routers.tracking.rule=Host(`${DOMAIN}`) && PathPrefix(`/api/track`)"
+      - "traefik.http.routers.tracking.entrypoints=websecure"
+      - "traefik.http.routers.tracking.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.tracking.middlewares=no-cache@file,rate-limit-tracking@file"
+      - "traefik.http.routers.tracking.service=backend-svc"
+      - "traefik.http.routers.tracking.priority=20"
+
+      # ── Auth routes (strict rate limit) ──
+      - "traefik.http.routers.auth.rule=Host(`${DOMAIN}`) && PathPrefix(`/api/auth`)"
+      - "traefik.http.routers.auth.entrypoints=websecure"
+      - "traefik.http.routers.auth.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.auth.middlewares=rate-limit-auth@file,security-headers@file"
+      - "traefik.http.routers.auth.service=backend-svc"
+      - "traefik.http.routers.auth.priority=15"
+
+      # ── All other API routes ──
+      - "traefik.http.routers.api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.api.middlewares=rate-limit-api@file,security-headers@file,compress@file"
+      - "traefik.http.routers.api.service=backend-svc"
+      - "traefik.http.routers.api.priority=10"
+
+      # ── Health check route ──
+      - "traefik.http.routers.health.rule=Host(`${DOMAIN}`) && Path(`/health`)"
+      - "traefik.http.routers.health.entrypoints=websecure"
+      - "traefik.http.routers.health.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.health.service=backend-svc"
+      - "traefik.http.routers.health.priority=25"
+
+      # ── Backend service definition ──
+      - "traefik.http.services.backend-svc.loadbalancer.server.port=8000"
+      - "traefik.http.services.backend-svc.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.backend-svc.loadbalancer.healthcheck.interval=30s"
+
+  # ── Celery Worker ────────────────────────────────────────────
+  celery-worker:
+    build: ./backend
+    command: celery -A tasks.celery_app worker --loglevel=info -c 4 -Q default,email,backup,ai
+    restart: unless-stopped
+    networks:
+      - internal
+    volumes:
+      - maildata:/var/mail
+    environment:
+      <<: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "celery", "-A", "tasks.celery_app", "inspect", "ping"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+
+  # ── Celery Beat ──────────────────────────────────────────────
+  celery-beat:
+    build: ./backend
+    command: celery -A tasks.celery_app beat --loglevel=info --scheduler celery.beat:PersistentScheduler
+    restart: unless-stopped
+    networks:
+      - internal
+    environment:
+      <<: *backend-env
+    depends_on:
+      - redis
+
+  # ── Frontend ─────────────────────────────────────────────────
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    networks:
+      - traefik-public
+    expose:
+      - "3000"
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=email-platform_traefik-public"
+
+      # ── Frontend catch-all route (lowest priority) ──
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.frontend.middlewares=security-headers@file,compress@file"
+      - "traefik.http.routers.frontend.service=frontend-svc"
+      - "traefik.http.routers.frontend.priority=1"
+
+      - "traefik.http.services.frontend-svc.loadbalancer.server.port=3000"
+
+  # ── SpamAssassin ─────────────────────────────────────────────
+  spamassassin:
+    image: instantlinux/spamassassin:latest
+    restart: unless-stopped
+    networks:
+      - internal
+    volumes:
+      - ./infra/spamassassin:/etc/spamassassin
+
+  # ── ClamAV ───────────────────────────────────────────────────
+  clamav:
+    image: clamav/clamav:latest
+    restart: unless-stopped
+    networks:
+      - internal
+    volumes:
+      - clamav_data:/var/lib/clamav
+      - ./infra/clamav:/etc/clamav
+
+  # ── Fail2ban ─────────────────────────────────────────────────
+  fail2ban:
+    image: crazymax/fail2ban:latest
+    restart: unless-stopped
+    network_mode: host
+    cap_add: [NET_ADMIN, NET_RAW]
+    volumes:
+      - ./infra/fail2ban:/data
+      - /var/log:/var/log:ro
+
+===================================================================
+SECTION 4 — DATABASE — ALL TABLES
+===================================================================
+
+Generate ALL models using SQLAlchemy 2.0 async ORM.
+One Alembic migration (0001_initial.py) creates everything.
+All PKs are UUID via gen_random_uuid(). All timestamps TIMESTAMPTZ.
+
+users:
+  id UUID PK, email VARCHAR(319) UNIQUE NOT NULL,
+  hashed_password TEXT NOT NULL,
+  role VARCHAR(20) NOT NULL DEFAULT 'user',
+  is_active BOOL DEFAULT true,
+  created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
+
+domains:
+  id UUID PK, name VARCHAR UNIQUE NOT NULL,
+  is_active BOOL DEFAULT true,
+  is_suspended BOOL DEFAULT false,
+  suspended_at TIMESTAMPTZ, suspended_reason TEXT,
+  storage_quota_gb INT DEFAULT 10,
+  used_storage_gb FLOAT DEFAULT 0,
+  cloudflare_token_encrypted TEXT,
+  cloudflare_zone_id VARCHAR(64),
+  cloudflare_auto_dns BOOL DEFAULT false,
+  dns_verified BOOL DEFAULT false,
+  dns_verified_at TIMESTAMPTZ,
+  dkim_private_key_encrypted TEXT,
+  dkim_selector VARCHAR(63) DEFAULT 'mail',
+  spf_record TEXT, dmarc_record TEXT,
+  admin_user_id UUID FK→users ON DELETE SET NULL,
+  whitelabel_logo_url TEXT,
+  whitelabel_primary_color VARCHAR(7) DEFAULT '#6366f1',
+  whitelabel_company_name VARCHAR(100),
+  retention_days INT DEFAULT 0,
+  ediscovery_enabled BOOL DEFAULT false,
+  created_at TIMESTAMPTZ
+
+domain_invites:
+  id UUID PK, domain_id UUID FK→domains ON DELETE CASCADE,
+  email VARCHAR NOT NULL, token VARCHAR(128) UNIQUE,
+  expires_at TIMESTAMPTZ, accepted_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ
+
+mailboxes:
+  id UUID PK, user_id UUID FK→users ON DELETE CASCADE,
+  domain_id UUID FK→domains ON DELETE CASCADE,
+  local_part VARCHAR(64) NOT NULL,
+  full_address VARCHAR(319) UNIQUE NOT NULL,
+  quota_mb INT DEFAULT 1024, used_mb FLOAT DEFAULT 0,
+  maildir_path TEXT, is_active BOOL DEFAULT true,
+  last_login_at TIMESTAMPTZ, created_at TIMESTAMPTZ
+  UNIQUE(local_part, domain_id)
+
+aliases:
+  id UUID PK, source_address VARCHAR UNIQUE,
+  destination_address VARCHAR,
+  domain_id UUID FK→domains ON DELETE CASCADE,
+  is_active BOOL DEFAULT true,
+  is_catch_all BOOL DEFAULT false,
+  created_at TIMESTAMPTZ
+
+sessions:
+  id UUID PK, user_id UUID FK→users ON DELETE CASCADE,
+  refresh_token_hash TEXT, expires_at TIMESTAMPTZ,
+  ip_address INET, created_at TIMESTAMPTZ
+
+audit_logs:
+  id UUID PK, user_id UUID FK→users ON DELETE SET NULL,
+  action VARCHAR(100), target TEXT,
+  ip_address INET, user_agent TEXT, created_at TIMESTAMPTZ
+
+login_activity:
+  id UUID PK, user_id UUID FK→users ON DELETE CASCADE,
+  ip_address INET, user_agent TEXT, device_type VARCHAR(20),
+  location TEXT, success BOOL, failure_reason TEXT,
+  created_at TIMESTAMPTZ
+
+password_reset_tokens:
+  id UUID PK, user_id UUID FK→users ON DELETE CASCADE,
+  token VARCHAR(128) UNIQUE, expires_at TIMESTAMPTZ,
+  used_at TIMESTAMPTZ, created_at TIMESTAMPTZ
+
+totp_secrets:
+  id UUID PK, user_id UUID UNIQUE FK→users ON DELETE CASCADE,
+  secret TEXT, is_enabled BOOL DEFAULT false,
+  backup_codes TEXT[] DEFAULT '{}', created_at TIMESTAMPTZ
+
+pgp_keys:
+  id UUID PK, mailbox_id UUID UNIQUE FK→mailboxes ON DELETE CASCADE,
+  public_key TEXT, private_key_encrypted TEXT,
+  fingerprint VARCHAR(40) UNIQUE, is_enabled BOOL DEFAULT false,
+  created_at TIMESTAMPTZ
+
+api_keys:
+  id UUID PK, mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  domain_id UUID FK→domains ON DELETE CASCADE,
+  name VARCHAR(100), key_hash TEXT UNIQUE, key_prefix VARCHAR(8),
+  scopes TEXT[] DEFAULT '{send}',
+  rate_limit_per_hour INT DEFAULT 1000,
+  last_used_at TIMESTAMPTZ, expires_at TIMESTAMPTZ,
+  is_active BOOL DEFAULT true, created_at TIMESTAMPTZ
+
+backup_jobs:
+  id UUID PK, type VARCHAR(20), status VARCHAR(20),
+  domain_id UUID FK→domains ON DELETE SET NULL,
+  mailbox_id UUID FK→mailboxes ON DELETE SET NULL,
+  file_path TEXT, file_size_mb FLOAT, total_messages INT,
+  error_message TEXT, created_at TIMESTAMPTZ, completed_at TIMESTAMPTZ
+
+email_threads:
+  id UUID PK, mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  subject VARCHAR, participants TEXT[],
+  last_message_at TIMESTAMPTZ,
+  message_count INT DEFAULT 1, has_unread BOOL DEFAULT true,
+  created_at TIMESTAMPTZ
+
+labels:
+  id UUID PK, mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  name VARCHAR(50), color VARCHAR(7) DEFAULT '#6366f1',
+  created_at TIMESTAMPTZ
+  UNIQUE(mailbox_id, name)
+
+email_labels:
+  email_uid VARCHAR(50),
+  label_id UUID FK→labels ON DELETE CASCADE,
+  mailbox_id UUID FK→mailboxes ON DELETE CASCADE
+  PRIMARY KEY(email_uid, label_id)
+
+email_rules:
+  id UUID PK, mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  name VARCHAR(100), is_active BOOL DEFAULT true,
+  priority INT DEFAULT 0, match_type VARCHAR(10) DEFAULT 'any',
+  conditions JSONB DEFAULT '[]', actions JSONB DEFAULT '[]',
+  created_at TIMESTAMPTZ
+
+email_templates:
+  id UUID PK, mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  name VARCHAR(100), subject VARCHAR,
+  body_text TEXT, body_html TEXT,
+  created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
+
+read_receipts:
+  id UUID PK,
+  sender_mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  message_id VARCHAR, recipient_email VARCHAR,
+  opened_at TIMESTAMPTZ, open_count INT DEFAULT 0,
+  ip_address INET, user_agent TEXT, created_at TIMESTAMPTZ
+
+email_tracking_pixels:
+  id UUID PK,
+  read_receipt_id UUID FK→read_receipts ON DELETE CASCADE,
+  token VARCHAR(64) UNIQUE, created_at TIMESTAMPTZ
+
+email_link_clicks:
+  id UUID PK,
+  read_receipt_id UUID FK→read_receipts ON DELETE CASCADE,
+  original_url TEXT, tracking_token VARCHAR(64) UNIQUE,
+  click_count INT DEFAULT 0,
+  first_clicked_at TIMESTAMPTZ, last_clicked_at TIMESTAMPTZ
+
+unsubscribe_tokens:
+  id UUID PK,
+  sender_mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  recipient_email VARCHAR, token VARCHAR(64) UNIQUE,
+  unsubscribed_at TIMESTAMPTZ, created_at TIMESTAMPTZ
+  UNIQUE(sender_mailbox_id, recipient_email)
+
+unsubscribe_list:
+  sender_mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  recipient_email VARCHAR,
+  unsubscribed_at TIMESTAMPTZ DEFAULT now()
+  PRIMARY KEY(sender_mailbox_id, recipient_email)
+
+webhooks:
+  id UUID PK, mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  url TEXT, secret VARCHAR(64),
+  events TEXT[] DEFAULT '{receive,send}',
+  is_active BOOL DEFAULT true,
+  last_triggered_at TIMESTAMPTZ, failure_count INT DEFAULT 0,
+  created_at TIMESTAMPTZ
+
+campaign_emails:
+  id UUID PK, mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  name VARCHAR(100), subject VARCHAR,
+  body_html TEXT, body_text TEXT, from_name VARCHAR(100),
+  recipients JSONB DEFAULT '[]',
+  status VARCHAR(20) DEFAULT 'draft',
+  scheduled_at TIMESTAMPTZ, started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  total_recipients INT DEFAULT 0, sent_count INT DEFAULT 0,
+  failed_count INT DEFAULT 0, open_count INT DEFAULT 0,
+  click_count INT DEFAULT 0, unsubscribe_count INT DEFAULT 0,
+  created_at TIMESTAMPTZ
+
+autoresponders:
+  id UUID PK,
+  mailbox_id UUID UNIQUE FK→mailboxes ON DELETE CASCADE,
+  is_enabled BOOL DEFAULT false,
+  subject VARCHAR DEFAULT 'Out of Office',
+  body TEXT, start_date DATE, end_date DATE,
+  reply_once_per_sender BOOL DEFAULT true,
+  created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
+
+autoresponder_sent:
+  id UUID PK,
+  autoresponder_id UUID FK→autoresponders ON DELETE CASCADE,
+  sent_to VARCHAR, sent_at TIMESTAMPTZ DEFAULT now()
+
+scheduled_emails:
+  id UUID PK, mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  send_at TIMESTAMPTZ,
+  to_addresses TEXT[], cc_addresses TEXT[] DEFAULT '{}',
+  bcc_addresses TEXT[] DEFAULT '{}',
+  subject VARCHAR, body_text TEXT, body_html TEXT,
+  attachments JSONB DEFAULT '[]',
+  status VARCHAR(20) DEFAULT 'pending',
+  error_message TEXT, created_at TIMESTAMPTZ
+
+contacts:
+  id UUID PK, user_id UUID FK→users ON DELETE CASCADE,
+  email VARCHAR, name VARCHAR, notes TEXT,
+  created_at TIMESTAMPTZ
+  UNIQUE(user_id, email)
+
+calendar_events:
+  id UUID PK, mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  uid VARCHAR UNIQUE, title VARCHAR, description TEXT,
+  location VARCHAR, start_at TIMESTAMPTZ, end_at TIMESTAMPTZ,
+  all_day BOOL DEFAULT false, rrule TEXT,
+  attendees JSONB DEFAULT '[]', linked_email_uid VARCHAR,
+  created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
+
+tasks:
+  id UUID PK, mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  title VARCHAR, description TEXT,
+  due_at TIMESTAMPTZ, is_completed BOOL DEFAULT false,
+  completed_at TIMESTAMPTZ, priority VARCHAR(10) DEFAULT 'normal',
+  linked_email_uid VARCHAR,
+  created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
+
+notes:
+  id UUID PK, mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  title VARCHAR, body TEXT, linked_email_uid VARCHAR,
+  created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
+
+shared_mailboxes:
+  id UUID PK,
+  mailbox_id UUID UNIQUE FK→mailboxes ON DELETE CASCADE,
+  domain_id UUID FK→domains ON DELETE CASCADE,
+  display_name VARCHAR(100), created_at TIMESTAMPTZ
+
+shared_mailbox_members:
+  shared_mailbox_id UUID FK→shared_mailboxes ON DELETE CASCADE,
+  user_id UUID FK→users ON DELETE CASCADE,
+  permission VARCHAR(20) DEFAULT 'read_write',
+  added_at TIMESTAMPTZ
+  PRIMARY KEY(shared_mailbox_id, user_id)
+
+mailbox_delegations:
+  id UUID PK,
+  owner_mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  delegate_user_id UUID FK→users ON DELETE CASCADE,
+  permission VARCHAR(20) DEFAULT 'send_on_behalf',
+  created_at TIMESTAMPTZ
+  UNIQUE(owner_mailbox_id, delegate_user_id)
+
+spam_reports:
+  id UUID PK, mailbox_id UUID FK→mailboxes ON DELETE CASCADE,
+  email_uid VARCHAR, from_address VARCHAR,
+  report_type VARCHAR(10), created_at TIMESTAMPTZ
+
+ediscovery_exports:
+  id UUID PK, domain_id UUID FK→domains ON DELETE CASCADE,
+  requested_by UUID FK→users ON DELETE SET NULL,
+  query JSONB, status VARCHAR(20) DEFAULT 'pending',
+  file_path TEXT, total_messages INT DEFAULT 0,
+  created_at TIMESTAMPTZ, completed_at TIMESTAMPTZ
+
+===================================================================
+SECTION 5 — SMTP SERVER
+===================================================================
+
+File: backend/smtp/server.py
+
+Two aiosmtpd Controllers started in asyncio event loop:
+  Port 25:  InboundHandler — no AUTH, receives from internet
+  Port 587: SubmissionHandler — AUTH PLAIN + LOGIN, STARTTLS mandatory
+  TLS cert: loaded from /etc/ssl/mail.crt and /etc/ssl/mail.key
+  NOTE: Since Traefik handles TLS for HTTP only, SMTP/IMAP TLS
+  certs must still be provisioned separately. Use Certbot on host
+  or use a self-signed cert for initial setup. The SMTP and IMAP
+  TLS is independent from Traefik — Traefik does not proxy raw TCP.
+
+  create_smtp_servers() → (smtp25_controller, smtp587_controller)
+
+File: backend/smtp/handler.py
+
+InboundHandler.on_rcpt(): validate domain, check alias, check suspended
+InboundHandler.on_data(): full pipeline:
+  1. Validate recipient domain exists in DB
+  2. Resolve aliases and catch-all
+  3. Reject if domain.is_suspended (451 temp fail)
+  4. Reject if message > MAX_MESSAGE_SIZE_MB (552)
+  5. SpamAssassin: spamc subprocess, add X-Spam headers
+     If score > 10: deliver to Spam folder instead of Inbox
+  6. ClamAV: clamd TCP socket, reject 550 if virus found
+  7. DKIM verify with dkimpy
+  8. Write to Maildir using Python mailbox.Maildir
+  9. Update mailboxes.used_mb
+  10. Apply email rules (rules_service.apply_rules)
+  11. Thread: thread_service.get_or_create_thread
+  12. Autoresponder check and send if enabled
+  13. Webhook fire: tracking_service.fire_webhook
+  14. Schedule delete task if domain.retention_days > 0
+
+File: backend/smtp/outbound.py
+
+Direct MX delivery — port 25 open on Contabo, no relay needed:
+
+async def send_direct(from_addr, to_list, subject,
+                      body_text, body_html, attachments, headers):
+  1. DKIM sign message with sender domain private key
+  2. For each recipient:
+     a. Check unsubscribe_list — skip if found
+     b. dnspython: query MX records for recipient domain
+     c. Sort MX by priority, try each until success
+     d. aiosmtplib.send with STARTTLS
+     e. On all MX fail: raise SMTPException for Celery retry
+  3. Return {success, message_id, failed_recipients}
+
+async def send_email(to, subject, body_text, body_html, **kwargs)
+  # backward-compatible wrapper calling send_direct
+
+===================================================================
+SECTION 6 — IMAP SERVER
+===================================================================
+
+File: backend/imap/server.py
+  asyncio.start_server on 0.0.0.0:993
+  ssl.SSLContext: TLSv1.2 minimum, load cert files
+  Wrap each accepted connection with SSLContext
+  Each connection → IMAPSession(reader, writer, db_pool)
+  create_imap_server() → asyncio task, cancellable
+
+File: backend/imap/session.py
+  IMAP4rev1 state machine
+  States: NOT_AUTHENTICATED → AUTHENTICATED → SELECTED → LOGOUT
+  Parse: {tag} {COMMAND} {args...} from client
+  Dispatch to command module handlers
+  Handle pipelining: buffer and process queued commands
+  Graceful: send BYE on connection close
+
+File: backend/imap/maildir.py
+  list_folders(maildir_path) → list of IMAP folder names
+  list_messages(folder_path) → [{uid, flags, size, internaldate}]
+  read_message(folder_path, uid) → bytes (raw RFC822)
+  write_message(folder_path, raw_bytes, flags) → uid
+  set_flags(folder_path, uid, flags) → rename file :2,FLAGS
+  delete_message(folder_path, uid) → unlink file
+  get_uid_validity(folder_path) → int
+  get_next_uid(folder_path) → int
+  folder_stats(folder_path) → {exists, recent, unseen, uidvalidity, uidnext}
+
+Commands — implement fully:
+  login.py: bcrypt verify, check active + not suspended,
+    update last_login_at, log login_activity, return CAPABILITY
+  select.py: open Maildir folder, return EXISTS RECENT UNSEEN
+    UIDVALIDITY UIDNEXT FLAGS responses
+  fetch.py: RFC822 RFC822.HEADER RFC822.SIZE BODY[] BODY[TEXT]
+    BODY[HEADER] BODYSTRUCTURE FLAGS ENVELOPE UID INTERNALDATE
+  search.py: ALL FROM TO CC SUBJECT SINCE BEFORE ON BODY TEXT
+    UNSEEN SEEN FLAGGED ANSWERED DELETED DRAFT LARGER SMALLER UID
+  store.py: FLAGS +FLAGS -FLAGS with .SILENT variant
+    Flags: \Seen \Answered \Flagged \Deleted \Draft
+  expunge.py: delete \Deleted messages, return EXPUNGE responses
+  copy.py: copy files to target Maildir, return COPYUID
+  move.py: RFC 6851 atomic move, return COPYUID
+  append.py: write literal bytes to folder, return APPENDUID
+  idle.py: RFC 2177, poll every 30s, push EXISTS on new mail,
+    return to command mode on DONE
+
+===================================================================
+SECTION 7 — FASTAPI BACKEND
+===================================================================
+
+File: backend/main.py
+
+@asynccontextmanager
+async def lifespan(app):
+    smtp25, smtp587 = await create_smtp_servers()
+    imap_task = asyncio.create_task(create_imap_server())
+    yield
+    smtp25.close(); smtp587.close()
+    imap_task.cancel()
+
+app = FastAPI(lifespan=lifespan)
+add_rate_limiting(app)
+add_audit_logging(app)
+
+Mount all routers:
+  /api/auth        /api/super-admin   /api/domain-admin
+  /api/mail        /api/folders       /api/threads
+  /api/labels      /api/rules         /api/templates
+  /api/contacts    /api/calendar      /api/tasks
+  /api/notes       /api/ai            /api/pgp
+  /api/campaigns   /api/webhooks      /api/keys
+  /api/v1          /api/track         /api/shared-mailboxes
+  /api/delegation  /api/mail/report   /api/admin/ediscovery
+
+@app.get("/health")
+async def health(): return {"status": "ok"}
+
+File: backend/api/deps.py
+
+get_db() → AsyncSession generator
+get_current_user(token) → User
+get_current_super_admin(user) → User (403 if wrong role)
+get_current_domain_admin(user, db) → (User, Domain)
+  Check role=domain_admin, domain not suspended
+get_current_mailbox_user(user, db) → (User, Mailbox)
+  Check mailbox active, domain not suspended
+get_api_key_auth(request, db) → (ApiKey, Mailbox)
+  Read X-API-Key, bcrypt verify, check active+expiry,
+  check + increment Redis rate limit counter
+
+──────────────────────────────────────────
+AUTH ROUTES /api/auth
+──────────────────────────────────────────
+
+POST /login
+  bcrypt verify, record login_activity
+  If totp: return {requires_totp, temp_token}
+  Else: create access+refresh tokens, return with role+domain_id
+
+POST /totp/verify   Body:{temp_token, code} → full JWT
+POST /refresh       Body:{refresh_token} → {access_token}
+POST /logout        Invalidate session
+POST /password-reset/request   Always 200, send email if found
+POST /password-reset/confirm   Verify token, update password
+POST /totp/setup    → {secret, qr_uri, backup_codes}
+POST /totp/enable   Body:{code}
+POST /totp/disable  Body:{password}
+GET  /login-activity → last 50 events
+GET  /sessions       → active sessions
+DELETE /sessions/{id}
+POST /accept-invite  Body:{token, password}
+
+──────────────────────────────────────────
+SUPER ADMIN ROUTES /api/super-admin
+Require get_current_super_admin
+──────────────────────────────────────────
+
+GET  /stats
+GET  /domains
+POST /domains           Auto-generate DKIM keypair, encrypt private key
+PATCH /domains/{id}
+DELETE /domains/{id}    Soft delete
+POST /domains/{id}/assign-admin  Body:{email}
+POST /domains/{id}/suspend       Body:{reason}
+POST /domains/{id}/unsuspend
+POST /domains/{id}/dns/auto
+GET  /domains/{id}/dns/guide
+POST /domains/{id}/dns/verify
+GET  /domains/{id}/users
+POST /backup/full       Queue Celery task, return {job_id}
+GET  /backups
+GET  /backups/{id}/download    StreamingResponse
+POST /restore           Multipart upload
+GET  /audit-logs        Paginated, filterable
+
+──────────────────────────────────────────
+DOMAIN ADMIN ROUTES /api/domain-admin
+Require get_current_domain_admin
+All queries scoped to JWT domain_id — never trust body
+──────────────────────────────────────────
+
+GET  /stats
+GET  /onboarding
+GET  /mailboxes             ?search=&status=&page=&limit=
+POST /mailboxes             Validate regex, check quota, provision Maildir
+GET  /mailboxes/{id}
+PATCH /mailboxes/{id}
+POST /mailboxes/{id}/reset-password
+DELETE /mailboxes/{id}
+POST /mailboxes/{id}/export/mbox → StreamingResponse
+POST /mailboxes/{id}/export/zip  → StreamingResponse
+POST /mailboxes/{id}/import/mbox → multipart
+POST /mailboxes/{id}/import/zip  → multipart
+GET  /mailboxes/{id}/activity
+
+GET  /aliases
+POST /aliases
+PATCH /aliases/{id}
+DELETE /aliases/{id}
+
+GET  /dns/status    Live dnspython queries for all 5 records + PTR
+GET  /dns/guide
+POST /dns/verify
+POST /dns/auto
+
+POST /backup
+GET  /backup/jobs
+GET  /backup/jobs/{id}/download
+POST /backup/restore        Preview without ?confirm, restore with ?confirm=true
+
+GET  /shared-mailboxes
+POST /shared-mailboxes
+POST /shared-mailboxes/{id}/members
+PATCH /shared-mailboxes/{id}/members/{uid}
+DELETE /shared-mailboxes/{id}/members/{uid}
+DELETE /shared-mailboxes/{id}
+
+GET  /whitelabel
+PATCH /whitelabel
+
+GET  /retention
+PATCH /retention
+
+POST /ediscovery/search
+POST /ediscovery/export
+GET  /ediscovery/exports
+GET  /ediscovery/exports/{id}/download
+
+GET  /audit-logs
+
+──────────────────────────────────────────
+MAIL ROUTES /api/mail (user)
+──────────────────────────────────────────
+
+GET  /folders
+GET  /{folder}        ?page=&limit=&thread=true&sort=newest
+GET  /{folder}/{uid}
+POST /send            ?undo_window=10
+DELETE /{folder}/{uid}
+PATCH /{folder}/{uid}/flags
+POST  /{folder}/{uid}/move
+GET  /search?q=
+GET  /autoresponder
+PUT  /autoresponder
+DELETE /autoresponder
+POST /schedule
+GET  /scheduled
+DELETE /scheduled/{id}/cancel
+DELETE /send/{id}/undo
+POST /report/spam
+POST /report/not-spam
+
+──────────────────────────────────────────
+ALL OTHER ROUTES — implement fully
+──────────────────────────────────────────
+
+/api/threads:   GET /{folder}, GET /{id}/messages
+/api/labels:    CRUD + apply/remove per email_uid
+/api/rules:     CRUD + POST /{id}/test
+/api/templates: CRUD + GET /{id}/use
+/api/contacts:  CRUD + GET ?q=
+/api/calendar:  CRUD events + import ICS + export ICS
+/api/tasks:     CRUD + complete + from-email
+/api/notes:     CRUD
+/api/ai:        summarize, smart-reply, priority-inbox, suggest-labels
+/api/pgp:       generate, own-key, lookup/{email}, delete
+/api/campaigns: CRUD + send + schedule + analytics
+/api/webhooks:  CRUD + test
+/api/keys:      list, create (return full key ONCE), delete
+/api/v1/send:   X-API-Key auth, rate limit via Redis, queue delivery
+/api/track:     GET /px/{token}.gif (1x1 GIF), GET /click/{token}
+/api/unsubscribe/{token}: HTML confirmation page
+/api/shared-mailboxes: CRUD members
+/api/delegation: granted, received, grant, revoke, inbox
+/api/admin/ediscovery: export, list, download
+
+===================================================================
+SECTION 8 — SERVICES — implement every function fully
+===================================================================
+
+auth_service.py:
+  create_access_token, create_refresh_token (store hashed),
+  verify_access_token, verify_refresh_token,
+  record_login_activity
+
+cloudflare_service.py (async httpx):
+  get_zone_id, upsert_record, configure_domain_dns,
+  verify_dns_records → {mx, a, spf, dkim, dmarc, all_valid}
+
+dns_guide_service.py:
+  generate_dns_guide → {records, ptr_note, verify_commands}
+
+backup_service.py:
+  export_mailbox_mbox, export_mailbox_zip,
+  import_mbox, import_eml_zip,
+  create_domain_backup, restore_domain_backup,
+  create_full_backup, restore_full_backup,
+  auto_backup (keep last N by BACKUP_RETENTION_DAYS)
+
+thread_service.py:
+  get_or_create_thread, get_thread_messages
+
+rules_service.py:
+  apply_rules, evaluate_condition, execute_action
+  Conditions: from|to|subject|body|has_attachment
+  Actions: move_to|label|mark_read|star|mark_spam
+           |forward_to|auto_reply|delete
+
+ai_service.py (anthropic, claude-sonnet-4-20250514, max_tokens=1000):
+  summarize_thread → str
+  smart_reply_suggestions → list[str] (3 items)
+  rank_emails_by_priority → list[dict] with priority_score
+  suggest_labels → list[str]
+
+tracking_service.py:
+  generate_tracking_pixel_html, wrap_links_for_tracking,
+  generate_unsubscribe_token, add_unsubscribe_footer,
+  fire_webhook (HMAC-SHA256 sig, disable after 10 failures)
+
+pgp_service.py (pgpy):
+  generate_keypair, encrypt_message, decrypt_message, get_public_key
+
+totp_service.py (pyotp):
+  generate_secret → {secret, qr_uri, backup_codes},
+  enable, verify (TOTP + backup codes), disable
+
+campaign_service.py:
+  send_campaign: check unsub, personalise {{vars}},
+  inject pixel, wrap links, add footer, send_direct
+  get_analytics → {sent, opens, clicks, unsubs, rates}
+
+calendar_service.py (icalendar):
+  list_events, create_event, update_event, delete_event,
+  import_ics, export_ics
+
+===================================================================
+SECTION 9 — CELERY TASKS
+===================================================================
+
+celery_app.py:
+  broker = REDIS_URL
+  Queues: default, email, backup, ai
+  Beat schedule:
+    scheduled-backup:             daily at BACKUP_SCHEDULE_HOUR
+    check-storage-alerts:         every 3600s
+    process-scheduled-emails:     every 60s
+    process-scheduled-campaigns:  every 300s
+    enforce-retention:            daily at 03:00
+    process-priority-inbox:       every 1800s
+
+delivery.py:
+  @task(bind=True, max_retries=3, queue='email')
+  Retry: 60s → 300s → 900s exponential backoff
+
+backup_tasks.py, campaign_tasks.py, scheduled_email_tasks.py,
+storage_alert_tasks.py, retention_tasks.py, ai_tasks.py,
+cleanup.py — implement all fully as described previously
+
+===================================================================
+SECTION 10 — BACKEND requirements.txt
+===================================================================
+
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+aiosmtpd>=1.4.6
+aiosmtplib>=3.0.0
+asyncpg>=0.29.0
+sqlalchemy[asyncio]>=2.0.0
+alembic>=1.13.0
+pydantic-settings>=2.0.0
+pydantic[email]>=2.0.0
+passlib[bcrypt]>=1.7.4
+python-jose[cryptography]>=3.3.0
+cryptography>=42.0.0
+dkimpy>=1.1.7
+dnspython>=2.6.0
+pyspf>=2.0.14
+httpx>=0.27.0
+celery[redis]>=5.3.0
+redis>=5.0.0
+slowapi>=0.1.9
+anthropic>=0.25.0
+pyotp>=2.9.0
+pgpy>=0.6.0
+icalendar>=5.0.0
+Pillow>=10.0.0
+python-multipart>=0.0.9
+bleach>=6.1.0
+
+===================================================================
+SECTION 11 — BACKEND DOCKERFILE
+===================================================================
+
+FROM python:3.12-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y \
+    curl gcc libpq-dev spamc clamdscan \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 25 587 993 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+
+===================================================================
+SECTION 12 — FRONTEND DOCKERFILE
+===================================================================
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+EXPOSE 3000
+CMD ["node", "server.js"]
+
+next.config.ts: output: 'standalone'
+
+===================================================================
+SECTION 13 — FRONTEND
+===================================================================
+
+Tailwind: darkMode: 'class'
+TypeScript: zero 'any'
+All API calls via lib/api.ts
+TanStack Query for server state
+Zustand for auth + UI
+Role redirect in app/page.tsx:
+  super_admin → /super-admin
+  domain_admin → /domain-admin
+  user → /mail/inbox
+
+LOGIN PAGE:
+  Centered card, gradient bg, dark mode aware
+  White-label: ?domain= → GET /api/admin/whitelabel/public?domain=X
+  Email + password + remember me + forgot password link
+  TOTP step: 6 digit inputs auto-advance, backup code toggle
+  Error states: wrong creds, inactive, suspended, bad TOTP
+
+SUPER ADMIN PANEL (/super-admin):
+  Layout: sidebar (Dashboard, Domains, Backups, Audit Logs, Settings)
+  Guard: role != super_admin → /login
+  Dashboard: stats cards, domains table, recent audit log
+  Domains: search/filter table, Add Domain 3-step modal,
+    per-row actions dropdown, AssignAdminModal, DNSSetupModal
+  Backups: create + progress polling, restore with RESTORE confirm
+  Audit logs: filters, colored badges, export CSV
+
+DOMAIN ADMIN PANEL (/domain-admin):
+  Layout: sidebar with storage bar, all nav items
+  Guard: role != domain_admin → /login
+  Dashboard: onboarding checklist, stats, quick actions
+  Mailboxes: storage bar, search/filter, table, bulk actions
+    CreateMailboxModal (2-step: details + import/fresh choice)
+    EditMailboxModal (Details + Activity tabs)
+    ResetPasswordModal
+  Aliases: catch-all banner, table, CreateAliasModal
+  DNS: 5 status cards, PTR note, manual guide, CF auto-config,
+    Verify button
+  Shared: expandable rows with members, add member inline
+  Backup: create + progress, restore + RestorePreviewModal
+  Whitelabel: form + live preview side by side
+  eDiscovery: search form + results + export history
+  Retention: slider + impact estimate + danger warning
+  Audit: filters + colored table + CSV export
+
+USER MAIL PANEL (/mail):
+  Layout: sidebar (folders+labels+storage), topbar (search, compose,
+    thread/flat toggle, dark mode toggle)
+  Split pane desktop (380px list + rest reader)
+  Mobile: separate pages for list and reader
+
+  Folder list page:
+    Thread view: grouped rows (avatar, senders, subject, preview,
+      labels, time, star, unread badge)
+    Flat view: individual emails
+    Bulk actions: read, star, move, delete, spam
+    Loading skeletons, empty states
+
+  Email reader page:
+    Action buttons row, sender info
+    AI panel (collapsible): summary + smart reply chips
+    HTML body in sandboxed DOMPurified iframe
+    Remote images blocked + Load images banner
+    PGP: lock icon + Decrypt button
+    Labels bar + Create Task + Add Note
+    Read receipt status
+    Attachments grid with type icons
+    Thread messages section (collapsed, expandable)
+
+  ComposeModal:
+    TipTap editor + toolbar
+    To/CC/BCC tag inputs + contact autocomplete
+    Load template dropdown
+    PGP toggle (if recipient key found)
+    Read receipt + track opens + track clicks toggles
+    Schedule dropdown (1h / tomorrow 8am / custom)
+    Send with undo toast (10s countdown)
+    Drag-drop attachments, auto-save draft 30s
+
+  Calendar: month/week/day, create/edit events, import/export ICS
+  Tasks: list + Kanban board, link to emails
+  Notes: split list + markdown editor, auto-save
+
+  Settings hub → security, api-keys, webhooks, rules, templates,
+    labels, autoresponder, account
+
+  Security page:
+    TOTP: QR setup flow, backup codes
+    PGP: generate, fingerprint, download .asc
+    Login activity table
+    Sessions: list + revoke each
+    Change password
+
+  API Keys: table, create modal (show full key ONCE with copy warning)
+  Webhooks: table, add modal, test button per webhook
+  Rules: drag-to-reorder, RuleBuilderModal
+    Condition rows: field + operator + value
+    Action rows: action + value
+    Test button: preview table
+  Templates: split list + TipTap editor
+  Labels: color swatches + name table
+
+===================================================================
+SECTION 14 — MAKEFILE
+===================================================================
+
+Generate Makefile with:
+
+up:         docker compose up -d
+down:       docker compose down
+build:      docker compose up -d --build
+logs:       docker compose logs -f backend
+logs-traefik: docker compose logs -f traefik
+migrate:    docker compose exec backend alembic upgrade head
+seed:       docker compose exec backend python seed.py
+shell:      docker compose exec backend bash
+dbshell:    docker compose exec postgres psql -U ${POSTGRES_USER} ${POSTGRES_DB}
+restart:    docker compose restart backend
+ps:         docker compose ps
+test-smtp:  echo "EHLO test" | nc -w3 localhost 25
+test-imap:  openssl s_client -connect localhost:993
+dkim:       bash infra/dkim/generate_keys.sh $(DOMAIN)
+traefik-cert-check: docker compose exec traefik cat /acme/acme.json | python3 -c "import sys,json; d=json.load(sys.stdin); [print(k) for k in d]"
+
+===================================================================
+SECTION 15 — infra/ configs
+===================================================================
+
+infra/dkim/generate_keys.sh:
+  #!/bin/bash
+  DOMAIN=$1
+  if [ -z "$DOMAIN" ]; then echo "Usage: $0 <domain>"; exit 1; fi
+  mkdir -p infra/dkim
+  openssl genrsa -out infra/dkim/${DOMAIN}.private 2048
+  openssl rsa -in infra/dkim/${DOMAIN}.private -pubout -out infra/dkim/${DOMAIN}.public
+  PUBLIC=$(grep -v '^-' infra/dkim/${DOMAIN}.public | tr -d '\n')
+  echo ""
+  echo "=== DKIM DNS Record for ${DOMAIN} ==="
+  echo "Type: TXT"
+  echo "Name: mail._domainkey.${DOMAIN}"
+  echo "Value: v=DKIM1; k=rsa; p=${PUBLIC}"
+  echo ""
+
+infra/fail2ban/jail.local:
+  [sshd]
+  enabled = true; maxretry = 5; bantime = 3600
+
+  [postfix-sasl]
+  enabled = true; port = 587; filter = postfix-sasl
+  maxretry = 5; bantime = 3600
+
+  [dovecot]
+  enabled = true; port = 993; filter = dovecot
+  maxretry = 5; bantime = 3600
+
+infra/spamassassin/local.cf:
+  required_score 5.0
+  use_bayes 1
+  bayes_auto_learn 1
+
+infra/clamav/clamd.conf:
+  TCPSocket 3310
+  TCPAddr 0.0.0.0
+  MaxFileSize 25M
+  MaxScanSize 100M
+
+===================================================================
+SECTION 16 — seed.py
+===================================================================
+
+Creates super admin from env vars, prints next steps.
+Uses AsyncSessionLocal for DB operations.
+Checks if email already exists before creating.
+
+===================================================================
+SECTION 17 — README.md
+===================================================================
+
+# MailOS — Self-Hosted Email Platform
+
+## Prerequisites
+- Contabo VPS Ubuntu 24.04 (port 25 open by default)
+- Domain with DNS pointed to server IP
+- Docker + Docker Compose installed
+
+## Quick Start
+
+1. Clone repo to server
+2. cp .env.example .env — fill all values
+3. Generate secrets:
+   JWT_SECRET_KEY: openssl rand -hex 32
+   ENCRYPTION_SECRET_KEY: openssl rand -hex 32
+4. Set PTR record in Contabo panel → mail.yourdomain.com
+5. Add DNS records at Cloudflare:
+   A     mail → YOUR_IP
+   MX    @    → mail.yourdomain.com (priority 10)
+   TXT   @    → v=spf1 ip4:YOUR_IP mx ~all
+   TXT   _dmarc → v=DMARC1; p=quarantine; rua=mailto:dmarc@yourdomain.com
+6. Generate DKIM keys: make dkim DOMAIN=yourdomain.com
+   Add the TXT record output to Cloudflare DNS
+7. make build
+8. Traefik automatically obtains Let's Encrypt certificate
+   (Requires port 80 open for HTTP challenge)
+9. make migrate
+10. make seed
+11. Login at https://yourdomain.com/login
+
+## How Traefik TLS Works
+Traefik automatically requests and renews Let's Encrypt certificates.
+Certificates stored in traefik/acme/ volume.
+No manual certbot commands needed for HTTPS.
+SMTP/IMAP certs still require separate provisioning (Certbot on host).
+
+## Mail Port TLS (SMTP/IMAP)
+These ports bypass Traefik — handled directly by backend:
+  Port 25:  SMTP inbound (Contabo open)
+  Port 587: SMTP submission (STARTTLS)
+  Port 993: IMAP (TLS from connect)
+For these, run on the host:
+  certbot certonly --standalone -d mail.yourdomain.com
+  cp /etc/letsencrypt/live/mail.yourdomain.com/fullchain.pem infra/mail-certs/
+  cp /etc/letsencrypt/live/mail.yourdomain.com/privkey.pem infra/mail-certs/
+  Mount infra/mail-certs as /etc/ssl/mail in backend container.
+
+## Traefik Dashboard
+Access at: https://traefik.yourdomain.com
+Protected by basic auth (set TRAEFIK_DASHBOARD_PASSWORD_HASH in .env).
+
+## Roles
+  /login → super_admin   → /super-admin
+  /login → domain_admin  → /domain-admin
+  /login → user          → /mail/inbox
+
+## Upgrade
+  git pull && make build && make migrate
+
+===================================================================
+SECTION 18 — SMTP/IMAP CERT HANDLING IN DOCKER
+===================================================================
+
+Since Traefik does not proxy raw TCP (mail ports), SMTP and IMAP
+need their own TLS certificates.
+
+Add to infra/ directory:
+  infra/mail-certs/
+    fullchain.pem   (from certbot or Let's Encrypt)
+    privkey.pem
+
+Mount in docker-compose backend service:
+  - ./infra/mail-certs:/etc/ssl/mail:ro
+
+Add to Makefile:
+mail-cert:
+  certbot certonly --standalone -d mail.$(DOMAIN) \
+    --email $(ACME_EMAIL) --agree-tos --non-interactive
+  cp /etc/letsencrypt/live/mail.$(DOMAIN)/fullchain.pem infra/mail-certs/
+  cp /etc/letsencrypt/live/mail.$(DOMAIN)/privkey.pem infra/mail-certs/
+  chmod 644 infra/mail-certs/*.pem
+
+mail-cert-renew:
+  certbot renew --quiet
+  cp /etc/letsencrypt/live/mail.$(DOMAIN)/fullchain.pem infra/mail-certs/
+  cp /etc/letsencrypt/live/mail.$(DOMAIN)/privkey.pem infra/mail-certs/
+  docker compose restart backend
+
+Add cron for auto-renewal:
+  0 3 * * * cd /home/deploy/email-platform && make mail-cert-renew
+
+===================================================================
+GENERATION ORDER — GENERATE EVERY FILE, NONE SKIPPED
+===================================================================
+
+1.   .env.example
+2.   Makefile
+3.   docker-compose.yml
+4.   traefik/traefik.yml
+5.   traefik/dynamic/middlewares.yml
+6.   traefik/acme/.gitkeep
+7.   infra/spamassassin/local.cf
+8.   infra/clamav/clamd.conf
+9.   infra/fail2ban/jail.local
+10.  infra/dkim/generate_keys.sh
+11.  infra/mail-certs/.gitkeep
+12.  backend/requirements.txt
+13.  backend/Dockerfile
+14.  backend/config.py
+15.  backend/database.py
+16.  backend/core/encryption.py
+17.  backend/core/security.py
+18.  backend/core/ip_geo.py
+19.  backend/models/__init__.py
+20.  backend/models/user.py
+21.  backend/models/domain.py
+22.  backend/models/mailbox.py
+23.  backend/models/alias.py
+24.  backend/models/session.py
+25.  backend/models/audit_log.py
+26.  backend/models/login_activity.py
+27.  backend/models/api_key.py
+28.  backend/models/backup_job.py
+29.  backend/models/domain_invite.py
+30.  backend/models/password_reset_token.py
+31.  backend/models/totp_secret.py
+32.  backend/models/pgp_key.py
+33.  backend/models/email_thread.py
+34.  backend/models/label.py
+35.  backend/models/email_rule.py
+36.  backend/models/email_template.py
+37.  backend/models/read_receipt.py
+38.  backend/models/tracking_pixel.py
+39.  backend/models/link_click.py
+40.  backend/models/unsubscribe.py
+41.  backend/models/webhook.py
+42.  backend/models/campaign.py
+43.  backend/models/autoresponder.py
+44.  backend/models/scheduled_email.py
+45.  backend/models/contact.py
+46.  backend/models/calendar_event.py
+47.  backend/models/task.py
+48.  backend/models/note.py
+49.  backend/models/shared_mailbox.py
+50.  backend/models/delegation.py
+51.  backend/models/spam_report.py
+52.  backend/models/ediscovery_export.py
+53.  backend/alembic/env.py
+54.  backend/alembic/versions/0001_initial.py
+55.  backend/seed.py
+56.  backend/schemas/auth.py
+57.  backend/schemas/user.py
+58.  backend/schemas/domain.py
+59.  backend/schemas/mailbox.py
+60.  backend/schemas/mail.py
+61.  backend/schemas/label.py
+62.  backend/schemas/rule.py
+63.  backend/schemas/template.py
+64.  backend/schemas/calendar.py
+65.  backend/schemas/task.py
+66.  backend/schemas/note.py
+67.  backend/schemas/contact.py
+68.  backend/schemas/campaign.py
+69.  backend/schemas/webhook.py
+70.  backend/schemas/backup.py
+71.  backend/schemas/api_key.py
+72.  backend/schemas/admin.py
+73.  backend/schemas/domain_admin.py
+74.  backend/smtp/server.py
+75.  backend/smtp/handler.py
+76.  backend/smtp/outbound.py
+77.  backend/smtp/dkim.py
+78.  backend/imap/server.py
+79.  backend/imap/session.py
+80.  backend/imap/maildir.py
+81.  backend/imap/commands/__init__.py
+82.  backend/imap/commands/login.py
+83.  backend/imap/commands/select.py
+84.  backend/imap/commands/fetch.py
+85.  backend/imap/commands/search.py
+86.  backend/imap/commands/store.py
+87.  backend/imap/commands/expunge.py
+88.  backend/imap/commands/copy.py
+89.  backend/imap/commands/move.py
+90.  backend/imap/commands/append.py
+91.  backend/imap/commands/idle.py
+92.  backend/services/auth_service.py
+93.  backend/services/mail_service.py
+94.  backend/services/mailbox_service.py
+95.  backend/services/domain_service.py
+96.  backend/services/cloudflare_service.py
+97.  backend/services/dns_guide_service.py
+98.  backend/services/backup_service.py
+99.  backend/services/thread_service.py
+100. backend/services/rules_service.py
+101. backend/services/ai_service.py
+102. backend/services/tracking_service.py
+103. backend/services/pgp_service.py
+104. backend/services/totp_service.py
+105. backend/services/campaign_service.py
+106. backend/services/calendar_service.py
+107. backend/api/deps.py
+108. backend/api/middleware/rate_limit.py
+109. backend/api/middleware/audit.py
+110. backend/api/routers/auth.py
+111. backend/api/routers/super_admin.py
+112. backend/api/routers/domain_admin.py
+113. backend/api/routers/mail.py
+114. backend/api/routers/folders.py
+115. backend/api/routers/threads.py
+116. backend/api/routers/labels.py
+117. backend/api/routers/rules.py
+118. backend/api/routers/templates.py
+119. backend/api/routers/contacts.py
+120. backend/api/routers/calendar.py
+121. backend/api/routers/tasks.py
+122. backend/api/routers/notes.py
+123. backend/api/routers/ai.py
+124. backend/api/routers/pgp.py
+125. backend/api/routers/campaigns.py
+126. backend/api/routers/webhooks.py
+127. backend/api/routers/api_keys.py
+128. backend/api/routers/send_api.py
+129. backend/api/routers/tracking.py
+130. backend/api/routers/shared_mailboxes.py
+131. backend/api/routers/delegation.py
+132. backend/api/routers/spam_reports.py
+133. backend/api/routers/ediscovery.py
+134. backend/tasks/celery_app.py
+135. backend/tasks/delivery.py
+136. backend/tasks/cleanup.py
+137. backend/tasks/backup_tasks.py
+138. backend/tasks/campaign_tasks.py
+139. backend/tasks/scheduled_email_tasks.py
+140. backend/tasks/storage_alert_tasks.py
+141. backend/tasks/retention_tasks.py
+142. backend/tasks/ai_tasks.py
+143. backend/main.py
+144. frontend/package.json
+145. frontend/tsconfig.json
+146. frontend/tailwind.config.ts
+147. frontend/next.config.ts
+148. frontend/Dockerfile
+149. frontend/public/manifest.json
+150. frontend/public/sw.js
+151. frontend/types/index.ts
+152. frontend/store/index.ts
+153. frontend/lib/auth.ts
+154. frontend/lib/api.ts
+155. frontend/lib/utils.ts
+156. frontend/hooks/useAuth.ts
+157. frontend/hooks/useMail.ts
+158. frontend/hooks/useInfiniteScroll.ts
+159. frontend/hooks/useWhitelabel.ts
+160. frontend/components/ui/Button.tsx
+161. frontend/components/ui/Input.tsx
+162. frontend/components/ui/Modal.tsx
+163. frontend/components/ui/Badge.tsx
+164. frontend/components/ui/Avatar.tsx
+165. frontend/components/ui/Toast.tsx
+166. frontend/components/ui/ProgressBar.tsx
+167. frontend/components/layout/Sidebar.tsx
+168. frontend/components/layout/Topbar.tsx
+169. frontend/components/layout/MobileSidebar.tsx
+170. frontend/components/mail/EmailList.tsx
+171. frontend/components/mail/EmailListItem.tsx
+172. frontend/components/mail/ThreadView.tsx
+173. frontend/components/mail/PriorityInbox.tsx
+174. frontend/components/mail/EmailReader.tsx
+175. frontend/components/mail/ComposeModal.tsx
+176. frontend/components/mail/AttachmentViewer.tsx
+177. frontend/components/mail/SearchBar.tsx
+178. frontend/components/mail/RuleBuilderModal.tsx
+179. frontend/components/super-admin/AddDomainModal.tsx
+180. frontend/components/super-admin/AssignAdminModal.tsx
+181. frontend/components/super-admin/DNSSetupModal.tsx
+182. frontend/components/domain-admin/CreateMailboxModal.tsx
+183. frontend/components/domain-admin/EditMailboxModal.tsx
+184. frontend/components/domain-admin/ResetPasswordModal.tsx
+185. frontend/components/domain-admin/CreateAliasModal.tsx
+186. frontend/components/domain-admin/RestorePreviewModal.tsx
+187. frontend/components/calendar/CalendarView.tsx
+188. frontend/app/layout.tsx
+189. frontend/app/page.tsx
+190. frontend/app/offline/page.tsx
+191. frontend/app/(auth)/login/page.tsx
+192. frontend/app/(auth)/forgot-password/page.tsx
+193. frontend/app/(auth)/reset-password/[token]/page.tsx
+194. frontend/app/invite/[token]/page.tsx
+195. frontend/app/unsubscribe/[token]/page.tsx
+196. frontend/app/super-admin/layout.tsx
+197. frontend/app/super-admin/page.tsx
+198. frontend/app/super-admin/domains/page.tsx
+199. frontend/app/super-admin/backups/page.tsx
+200. frontend/app/super-admin/audit-logs/page.tsx
+201. frontend/app/super-admin/settings/page.tsx
+202. frontend/app/domain-admin/layout.tsx
+203. frontend/app/domain-admin/page.tsx
+204. frontend/app/domain-admin/mailboxes/page.tsx
+205. frontend/app/domain-admin/aliases/page.tsx
+206. frontend/app/domain-admin/dns/page.tsx
+207. frontend/app/domain-admin/shared/page.tsx
+208. frontend/app/domain-admin/backup/page.tsx
+209. frontend/app/domain-admin/whitelabel/page.tsx
+210. frontend/app/domain-admin/ediscovery/page.tsx
+211. frontend/app/domain-admin/retention/page.tsx
+212. frontend/app/domain-admin/audit/page.tsx
+213. frontend/app/domain-admin/settings/page.tsx
+214. frontend/app/mail/layout.tsx
+215. frontend/app/mail/[folder]/page.tsx
+216. frontend/app/mail/[folder]/[uid]/page.tsx
+217. frontend/app/calendar/page.tsx
+218. frontend/app/tasks/page.tsx
+219. frontend/app/notes/page.tsx
+220. frontend/app/settings/page.tsx
+221. frontend/app/settings/security/page.tsx
+222. frontend/app/settings/api-keys/page.tsx
+223. frontend/app/settings/webhooks/page.tsx
+224. frontend/app/settings/rules/page.tsx
+225. frontend/app/settings/templates/page.tsx
+226. frontend/app/settings/labels/page.tsx
+227. README.md
+
+===================================================================
+ABSOLUTE RULES — NEVER VIOLATE
+===================================================================
+
+1.  Every file listed above must be generated — none skipped
+2.  Every function fully implemented — no pass, no TODO, no raise NotImplementedError
+3.  Every Python file uses async/await throughout
+4.  Every FastAPI route has a Pydantic v2 response model
+5.  Every DB query uses SQLAlchemy async session — no raw SQL strings
+6.  Every Next.js file is TypeScript — zero 'any' types
+7.  Tailwind only — no CSS modules, no styled-components
+8.  Every Tailwind color class has dark: variant
+9.  Every page: loading skeleton + error state + empty state
+10. Every form: validation + error messages + success toast
+11. Every destructive action: confirm dialog
+12. All secrets from environment variables — nothing hardcoded
+13. All Docker services: restart: unless-stopped + healthcheck
+14. Traefik routes use router priority to prevent conflicts:
+    tracking=20, auth=15, api=10, health=25, frontend=1
+15. Domain admin routes always scope to JWT domain_id
+16. API key: bcrypt verify against hash — never store plaintext
+17. DKIM private keys: Fernet-encrypted in DB
+18. Cloudflare tokens: Fernet-encrypted in DB
+19. HTML email bodies: bleach-sanitised before store/render
+20. Attachments: Content-Disposition: attachment always
+21. Traefik docker network label must match compose network name
+22. Backend and frontend must both be on traefik-public network
+23. PostgreSQL, Redis, SpamAssassin, ClamAV on internal network only
+24. Mail ports (25, 587, 993) bound directly — Traefik does not proxy
+
+If Copilot stops mid-generation, continue with:
+"Continue from file number X: [exact filename]"

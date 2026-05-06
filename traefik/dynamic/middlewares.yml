@@ -1,0 +1,6 @@
+http:
+  middlewares:
+    security-headers:
+      headers:
+        stsSeconds: 31536000
+        forceSTSHeader: true

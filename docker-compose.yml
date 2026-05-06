@@ -1,0 +1,66 @@
+services:
+  traefik:
+    image: traefik:v3.0
+    restart: unless-stopped
+    command: --providers.file.filename=/etc/traefik/dynamic/middlewares.yml
+    ports: ["80:80","443:443"]
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./traefik/acme:/acme
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [traefik-public]
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    healthcheck: { test: ["CMD-SHELL","python -c 'print(1)'"], interval: 30s, timeout: 5s, retries: 3 }
+    env_file: .env
+    ports: ["25:25","587:587","993:993"]
+    volumes: ["./infra/mail-certs:/etc/ssl/mail:ro"]
+    labels: ["traefik.enable=true","traefik.http.routers.api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)","traefik.http.routers.api.priority=10","traefik.http.services.api.loadbalancer.server.port=8000"]
+    depends_on: [postgres, redis]
+    networks: [traefik-public, internal]
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    healthcheck: { test: ["CMD-SHELL","node -e \"process.exit(0)\""], interval: 30s, timeout: 5s, retries: 3 }
+    labels: ["traefik.enable=true","traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)","traefik.http.routers.frontend.priority=1","traefik.http.services.frontend.loadbalancer.server.port=3000"]
+    networks: [traefik-public]
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    healthcheck: { test: ["CMD-SHELL","pg_isready -U $$POSTGRES_USER"], interval: 30s, timeout: 5s, retries: 3 }
+    env_file: .env
+    networks: [internal]
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    healthcheck: { test: ["CMD","redis-cli","ping"], interval: 30s, timeout: 5s, retries: 3 }
+    networks: [internal]
+  spamassassin:
+    image: instrumentisto/spamassassin
+    restart: unless-stopped
+    healthcheck: { test: ["CMD-SHELL","echo ok"], interval: 30s, timeout: 5s, retries: 3 }
+    networks: [internal]
+  clamav:
+    image: clamav/clamav:latest
+    restart: unless-stopped
+    healthcheck: { test: ["CMD-SHELL","echo ok"], interval: 30s, timeout: 5s, retries: 3 }
+    networks: [internal]
+  worker:
+    build: ./backend
+    command: celery -A tasks.celery_app.celery_app worker -Q default,email,backup,ai -l info
+    restart: unless-stopped
+    env_file: .env
+    healthcheck: { test: ["CMD-SHELL","python -c 'print(1)'"], interval: 30s, timeout: 5s, retries: 3 }
+    networks: [internal]
+  beat:
+    build: ./backend
+    command: celery -A tasks.celery_app.celery_app beat -l info
+    restart: unless-stopped
+    env_file: .env
+    healthcheck: { test: ["CMD-SHELL","python -c 'print(1)'"], interval: 30s, timeout: 5s, retries: 3 }
+    networks: [internal]
+networks:
+  traefik-public: {}
+  internal: {}
