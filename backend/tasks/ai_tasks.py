@@ -1,9 +1,12 @@
 from backend.tasks.celery_app import celery_app
-from backend.services.ai_service import rank_mailboxes_by_usage
+
 
 @celery_app.task(queue='ai')
 def process_priority_inbox() -> str:
-    import asyncio
+    from backend.tasks.task_db import task_db_session, run_async
+    from backend.services.ai_service import rank_mailboxes_by_usage
 
-    ranked = asyncio.run(rank_mailboxes_by_usage(limit=25))
+    with task_db_session() as db:
+        ranked = run_async(rank_mailboxes_by_usage(limit=25, db=None))
+
     return f"priority-inbox-updated:{len(ranked)}"

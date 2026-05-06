@@ -14,9 +14,13 @@ logger = logging.getLogger(__name__)
 async def _init_db() -> None:
     """Create all tables that don't yet exist (safe to run repeatedly)."""
     try:
+        from backend.config import settings
         from backend.database import engine
         from backend.models.base import Base
         import backend.models.all_models  # noqa: F401 — registers all mapped classes
+        if not settings.metadata_create_all_on_startup:
+            logger.info("Skipping metadata create_all (migrations manage schema).")
+            return
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables verified / created.")

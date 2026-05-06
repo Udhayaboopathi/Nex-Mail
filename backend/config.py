@@ -24,5 +24,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     super_admin_email: str = "admin@example.com"
     super_admin_password: str = "change-me"
+    # When False, FastAPI skips Base.metadata.create_all on startup (use with Alembic).
+    metadata_create_all_on_startup: bool = True
 
 settings = Settings()

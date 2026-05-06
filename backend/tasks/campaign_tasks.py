@@ -1,24 +1,21 @@
-from backend.tasks.celery_app import celery_app
 from sqlalchemy import select
 
-from backend.database import AsyncSessionLocal
+from backend.tasks.celery_app import celery_app
+from backend.tasks.task_db import task_db_session, run_async
 from backend.models import Campaign
 from backend.services.campaign_service import send_campaign
 
+
 @celery_app.task(queue='email')
 def process_scheduled_campaigns() -> str:
-    import asyncio
+    with task_db_session() as db:
+        rows = db.execute(
+            select(Campaign.id).where(Campaign.status == "scheduled")
+        ).all()
 
-    async def _run() -> int:
-        async with AsyncSessionLocal() as db:
-            rows = (
-                await db.execute(select(Campaign.id).where(Campaign.status == "scheduled"))
-            ).all()
-        sent = 0
-        for (campaign_id,) in rows:
-            result = await send_campaign(str(campaign_id))
-            sent += result["sent"]
-        return sent
+    sent = 0
+    for (campaign_id,) in rows:
+        result = run_async(send_campaign(str(campaign_id)))
+        sent += result.get("sent", 0)
 
-    sent_total = asyncio.run(_run())
-    return f"campaigns-processed:{sent_total}"
+    return f"campaigns-processed:{sent}"

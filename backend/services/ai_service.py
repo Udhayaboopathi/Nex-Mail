@@ -8,22 +8,30 @@ from __future__ import annotations
 import os
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import AsyncSessionLocal
 from backend.models.all_models import Mailbox
 
 
-async def rank_mailboxes_by_usage(limit: int = 20) -> list[dict]:
+async def rank_mailboxes_by_usage(limit: int = 20, db: AsyncSession | None = None) -> list[dict]:
     """Return mailboxes sorted by used_mb / quota_mb descending."""
-    async with AsyncSessionLocal() as db:
+    async def _query(session: AsyncSession) -> list:
         rows = (
-            await db.execute(
+            await session.execute(
                 select(Mailbox)
                 .where(Mailbox.is_active == True)
                 .order_by((Mailbox.used_mb / (Mailbox.quota_mb + 1)).desc())
                 .limit(limit)
             )
         ).scalars().all()
+        return rows
+
+    if db is not None:
+        rows = await _query(db)
+    else:
+        async with AsyncSessionLocal() as fresh:
+            rows = await _query(fresh)
 
     return [
         {

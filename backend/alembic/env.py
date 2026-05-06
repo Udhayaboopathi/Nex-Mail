@@ -57,20 +57,42 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations against a live DB connection."""
+    """Run migrations against a live DB connection.
+
+    Uses pg_advisory_xact_lock (transaction-level advisory lock, id 1234567890)
+    so that when backend, worker, and beat all start simultaneously only one
+    process runs the migration at a time; the others block, then detect there is
+    nothing left to migrate and exit cleanly.
+
+    The lock is acquired in its OWN transaction BEFORE Alembic touches the
+    alembic_version table, so the CREATE TABLE race condition is serialised.
+    """
+    from sqlalchemy import text
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            compare_type=True,
-        )
-        with context.begin_transaction():
-            context.run_migrations()
+        # Acquire the advisory lock in a separate transaction so it is held for
+        # the ENTIRE migration (including alembic_version table creation).
+        # pg_advisory_lock (session-level) persists for the whole connection.
+        connection.execute(text("SELECT pg_advisory_lock(1234567890)"))
+        connection.commit()
+
+        try:
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                compare_type=True,
+            )
+            with context.begin_transaction():
+                context.run_migrations()
+        finally:
+            # Always release the session-level advisory lock when done.
+            connection.execute(text("SELECT pg_advisory_unlock(1234567890)"))
+            connection.commit()
 
 
 if context.is_offline_mode():

@@ -291,3 +291,44 @@ async def get_backups() -> list[BackupJobItem]:
 async def trigger_full_backup() -> dict[str, str]:
     job_id = await create_full_backup()
     return {"job_id": job_id}
+
+
+class AuditLogItem(BaseModel):
+    id: str
+    user_id: str | None = None
+    action: str
+    resource_type: str | None = None
+    resource_id: str | None = None
+    ip_address: str | None = None
+    details: dict | None = None
+    created_at: str
+
+
+@router.get("/audit-logs")
+async def get_audit_logs(page: int = 1, per_page: int = 50) -> dict:
+    """Return paginated audit log entries."""
+    from backend.models.all_models import AuditLog
+    offset = max(0, (page - 1) * per_page)
+    try:
+        async with AsyncSessionLocal() as db:
+            total = int(await db.scalar(select(func.count(AuditLog.id))) or 0)
+            rows = (
+                await db.execute(
+                    select(AuditLog).order_by(AuditLog.created_at.desc()).limit(per_page).offset(offset)
+                )
+            ).scalars().all()
+        items = [
+            {
+                "id": str(r.id),
+                "user_id": str(r.user_id) if r.user_id else None,
+                "action": r.action or "",
+                "target": r.target,
+                "ip_address": r.ip_address,
+                "user_agent": r.user_agent,
+                "created_at": r.created_at.isoformat() if r.created_at else "",
+            }
+            for r in rows
+        ]
+        return {"items": items, "total": total, "page": page, "per_page": per_page}
+    except Exception:
+        return {"items": [], "total": 0, "page": page, "per_page": per_page}

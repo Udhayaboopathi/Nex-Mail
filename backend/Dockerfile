@@ -21,7 +21,7 @@ ENV PYTHONPATH=/app \
 
 EXPOSE 25 587 993 8000
 
-# Write startup script that runs migrations then starts uvicorn
-RUN printf '#!/bin/sh\nset -e\necho "Running database migrations..."\nalembic -c /app/backend/alembic.ini upgrade head\necho "Starting uvicorn..."\nexec uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1\n' > /app/start.sh && chmod +x /app/start.sh
+# Migrations run once via the migrate service in docker-compose (avoids concurrent alembic).
+RUN printf '#!/bin/sh\nset -e\nexec uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1\n' > /app/start.sh && chmod +x /app/start.sh
 
 CMD ["/app/start.sh"]

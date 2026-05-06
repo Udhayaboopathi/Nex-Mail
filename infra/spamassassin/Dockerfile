@@ -11,6 +11,9 @@ RUN apt-get update && \
         perl \
         libnet-dns-perl \
         libmail-spamassassin-perl \
+        libmail-spf-perl \
+        libmail-dmarc-perl \
+        libnet-ip-perl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy local config

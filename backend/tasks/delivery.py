@@ -1,14 +1,13 @@
 from backend.smtp.outbound import send_direct
 from backend.tasks.celery_app import celery_app
+from backend.tasks.task_db import run_async
 
 
 @celery_app.task(bind=True, max_retries=3, queue="email")
 def deliver_email(self, payload: dict) -> str:
     backoffs = [60, 300, 900]
     try:
-        import asyncio
-
-        asyncio.run(
+        run_async(
             send_direct(
                 from_addr=payload["from_addr"],
                 to_list=payload["to_list"],
