@@ -3,12 +3,13 @@ services:
     image: traefik:v3.7.0
     restart: unless-stopped
     env_file: .env
-    environment:
-      # Passed into static config (${ACME_EMAIL} in traefik.yml). Must be a real RFC email (Let's Encrypt rejects literals like ${VAR}).
-      ACME_EMAIL: ${ACME_EMAIL}
+    # ACME_EMAIL must be set in .env (real mailbox, no quotes around value). Passed as CLI — avoids Traefik rejecting "${ACME_EMAIL}" literally.
+    command:
+      - --configFile=/etc/traefik/traefik.yml
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
     ports: ["80:80","443:443"]
     volumes:
-      # Dynamic dir: routing is via Docker labels only. Remove any orphaned routes.yml — old files break Traefik parsing.
+      # Routing = Docker labels only. Remove orphaned traefik/dynamic/routes.yml if Traefik logs parse errors.
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
       - ./traefik/acme:/acme

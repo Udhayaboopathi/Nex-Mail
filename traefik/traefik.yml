@@ -23,7 +23,7 @@ providers:
 certificatesResolvers:
   letsencrypt:
     acme:
-      email: ${ACME_EMAIL}
+      # Registration email set by Docker Compose (see traefik service `command`) — not env-interpolated in this file on all setups.
       storage: /acme/acme.json
       httpChallenge:
         entryPoint: web
