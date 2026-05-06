@@ -14,8 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source into /app/backend/ so "from backend.xxx import" works
 COPY . ./backend/
 
-# Create a minimal top-level entry so uvicorn can find backend.main:app
-ENV PYTHONPATH=/app
+# Set PYTHONPATH so "from backend.xxx import" works from anywhere in the container
+# Set ALEMBIC_CONFIG so "alembic upgrade head" works without cd
+ENV PYTHONPATH=/app \
+    ALEMBIC_CONFIG=/app/backend/alembic.ini
 
 EXPOSE 25 587 993 8000
 
