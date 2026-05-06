@@ -68,15 +68,16 @@ export default function DomainsPage() {
           className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
       </div>
 
-      {/* Table */}
-      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 overflow-hidden">
+      {/* Table — avoid overflow-hidden on the card so row action menus aren't clipped */}
+      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800">
         {loading ? (
-          <div className="divide-y divide-gray-100 dark:divide-gray-800">
+          <div className="divide-y divide-gray-100 dark:divide-gray-800 rounded-xl overflow-hidden">
             {[1, 2, 3].map((i) => <div key={i} className="h-14 animate-pulse bg-gray-50 dark:bg-gray-800/50" />)}
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-16 text-gray-400 dark:text-gray-600 text-sm">No domains found.</div>
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 dark:bg-gray-800/50 text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider">
               <tr>
@@ -89,7 +90,10 @@ export default function DomainsPage() {
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
               {filtered.map((d) => (
-                <tr key={d.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30">
+                <tr
+                  key={d.id}
+                  className={`hover:bg-gray-50 dark:hover:bg-gray-800/30 ${menuOpen === d.id ? "relative z-10" : ""}`}
+                >
                   <td className="px-4 py-3 font-medium text-gray-900 dark:text-white">{d.name}</td>
                   <td className="px-4 py-3">
                     {d.is_suspended
@@ -111,7 +115,7 @@ export default function DomainsPage() {
                         <MoreVertical className="w-4 h-4 text-gray-500" />
                       </button>
                       {menuOpen === d.id && (
-                        <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-20 py-1" onMouseLeave={() => setMenuOpen(null)}>
+                        <div className="absolute right-0 top-full mt-1 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 py-1" onMouseLeave={() => setMenuOpen(null)}>
                           {[
                             { label: "Assign Admin", fn: () => { setAssignTarget(d); setMenuOpen(null); } },
                             { label: "DNS Setup", fn: () => { setDnsTarget(d); setMenuOpen(null); } },
@@ -129,6 +133,7 @@ export default function DomainsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
