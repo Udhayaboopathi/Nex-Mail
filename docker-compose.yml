@@ -147,5 +147,8 @@ services:
         condition: service_completed_successfully
     networks: [internal]
 networks:
-  traefik-public: {}
+  # Stable, unprefixed network name so Traefik label `traefik.docker.network=traefik-public`
+  # always resolves correctly regardless of compose project name.
+  traefik-public:
+    name: traefik-public
   internal: {}
