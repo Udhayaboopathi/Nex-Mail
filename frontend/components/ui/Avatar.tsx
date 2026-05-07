@@ -1,4 +1,5 @@
-import { cn, colorFromString, getInitials } from "../../lib/utils";
+import { Mail } from "lucide-react";
+import { cn, colorFromString } from "../../lib/utils";
 
 interface AvatarProps {
   email: string;
@@ -15,8 +16,8 @@ const sizeMap = {
 
 export function Avatar({ email, name, size = "md", className }: AvatarProps) {
   const label = name ?? email;
-  const initials = getInitials(label);
   const bg = colorFromString(email);
+  const iconSize = size === "sm" ? "w-3.5 h-3.5" : size === "md" ? "w-4 h-4" : "w-5 h-5";
 
   return (
     <span
@@ -29,7 +30,7 @@ export function Avatar({ email, name, size = "md", className }: AvatarProps) {
       title={label}
       aria-label={label}
     >
-      {initials}
+      <Mail className={iconSize} />
     </span>
   );
 }
