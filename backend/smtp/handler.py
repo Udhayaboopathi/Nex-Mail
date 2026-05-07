@@ -4,6 +4,7 @@ import asyncio
 import email
 import logging
 import uuid
+from datetime import date
 from email.message import Message
 from email.utils import getaddresses
 from mailbox import Maildir
@@ -14,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.database_sync import SessionLocalSync
-from backend.models import Alias, Domain, Email, Mailbox
+from backend.models import Alias, Autoresponder, AutoresponderSent, Domain, Email, Mailbox
 from backend.smtp.dkim import verify_message
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,24 @@ def _resolve_recipient_sync(db: Session, recipient: str):
                     Mailbox.is_active == True,
                 )
             )
+    if mailbox is None and "@" in recipient:
+        _local, domain_name = recipient.rsplit("@", 1)
+        domain_row = db.scalar(select(Domain).where(Domain.name == domain_name.lower()))
+        if domain_row is not None:
+            catch_all = db.scalar(
+                select(Alias).where(
+                    Alias.domain_id == domain_row.id,
+                    Alias.is_catch_all == True,
+                    Alias.is_active == True,
+                )
+            )
+            if catch_all and catch_all.destination_address:
+                mailbox = db.scalar(
+                    select(Mailbox).where(
+                        Mailbox.full_address == catch_all.destination_address,
+                        Mailbox.is_active == True,
+                    )
+                )
     if mailbox is None:
         return None
     domain = db.scalar(select(Domain).where(Domain.id == mailbox.domain_id))
@@ -106,17 +125,25 @@ def _partition_local_remote(rcpts: list[str]) -> tuple[list[str], list[str]]:
     return local, remote
 
 
-def _deliver_data_sync(envelope_rcpt_tos: list[str], envelope_content: bytes, parsed: Message, target_folder: str) -> str | None:
-    """Return SMTP error string or None on success."""
+def _deliver_data_sync(
+    envelope_rcpt_tos: list[str],
+    envelope_content: bytes,
+    parsed: Message,
+    target_folder: str,
+) -> tuple[str | None, list[dict[str, str]]]:
+    """Return SMTP error string + queued autoresponses."""
     max_bytes = settings.max_message_size_mb * 1024 * 1024
     if len(envelope_content) > max_bytes:
-        return "552 message too large"
+        return "552 message too large", []
 
+    auto_replies: list[dict[str, str]] = []
     with SessionLocalSync() as db:
         body_text, body_html = _extract_bodies(parsed)
         hdr_to = [a for _, a in getaddresses([str(parsed.get("To") or "")]) if a]
         hdr_cc = [a for _, a in getaddresses([str(parsed.get("Cc") or "")]) if a]
         hdr_bcc = [a for _, a in getaddresses([str(parsed.get("Bcc") or "")]) if a]
+        from_addrs = [a.strip().lower() for _, a in getaddresses([str(parsed.get("From") or "")]) if a]
+        sender_addr = from_addrs[0] if from_addrs else ""
         has_attachments = any(p.get_filename() for p in parsed.walk()) if parsed.is_multipart() else False
         for rcpt in envelope_rcpt_tos:
             resolved = _resolve_recipient_sync(db, rcpt)
@@ -124,7 +151,7 @@ def _deliver_data_sync(envelope_rcpt_tos: list[str], envelope_content: bytes, pa
                 continue
             mailbox, domain = resolved
             if domain.is_suspended:
-                return "451 domain suspended"
+                return "451 domain suspended", []
             _store_to_maildir(
                 mailbox.maildir_path or _fallback_maildir_path(mailbox.full_address),
                 parsed,
@@ -151,13 +178,43 @@ def _deliver_data_sync(envelope_rcpt_tos: list[str], envelope_content: bytes, pa
                 )
             )
             mailbox.used_mb = float(mailbox.used_mb or 0) + (len(envelope_content) / (1024 * 1024))
+
+            # Queue autoresponder after successful local persistence.
+            if sender_addr and sender_addr != (mailbox.full_address or "").lower() and "mailer-daemon@" not in sender_addr:
+                ar = db.scalar(select(Autoresponder).where(Autoresponder.mailbox_id == mailbox.id))
+                if ar and ar.is_enabled:
+                    today = date.today()
+                    in_window = (
+                        (ar.start_date is None or today >= ar.start_date)
+                        and (ar.end_date is None or today <= ar.end_date)
+                    )
+                    if in_window:
+                        already_sent = False
+                        if ar.reply_once_per_sender:
+                            already_sent = db.scalar(
+                                select(AutoresponderSent.id).where(
+                                    AutoresponderSent.autoresponder_id == ar.id,
+                                    AutoresponderSent.sent_to == sender_addr,
+                                )
+                            ) is not None
+                        if not already_sent:
+                            auto_replies.append(
+                                {
+                                    "from_addr": mailbox.full_address or "",
+                                    "to_addr": sender_addr,
+                                    "subject": ar.subject or "Out of Office",
+                                    "body": ar.body or "",
+                                }
+                            )
+                            db.add(AutoresponderSent(autoresponder_id=ar.id, sent_to=sender_addr))
         try:
             db.commit()
         except Exception:
             # Maildir delivery already succeeded; don't bounce external senders for a DB side failure.
             db.rollback()
             logger.exception("DB persistence failed after Maildir delivery")
-    return None
+            auto_replies = []
+    return None, auto_replies
 
 
 class InboundHandler:
@@ -185,7 +242,7 @@ class InboundHandler:
         else:
             parsed["X-DKIM-Verify"] = "pass"
 
-        err = await asyncio.to_thread(
+        err, auto_replies = await asyncio.to_thread(
             _deliver_data_sync,
             list(envelope.rcpt_tos),
             envelope.content,
@@ -194,6 +251,19 @@ class InboundHandler:
         )
         if err:
             return err
+        if auto_replies:
+            from backend.smtp.outbound import send_direct
+
+            for item in auto_replies:
+                try:
+                    await send_direct(
+                        from_addr=item["from_addr"],
+                        to_list=[item["to_addr"]],
+                        subject=item["subject"],
+                        body_text=item["body"],
+                    )
+                except Exception:
+                    logger.exception("Failed to send autoresponder reply from=%s to=%s", item["from_addr"], item["to_addr"])
         return "250 Message accepted for delivery"
 
     def _folder_for_message(self, parsed: Message) -> str:
@@ -246,9 +316,26 @@ class SubmissionHandler(InboundHandler):
                 parsed["X-DKIM-Verify"] = "fail"
             else:
                 parsed["X-DKIM-Verify"] = "pass"
-            err = await asyncio.to_thread(_deliver_data_sync, local_rcpts, raw, parsed, target_folder)
+            err, auto_replies = await asyncio.to_thread(_deliver_data_sync, local_rcpts, raw, parsed, target_folder)
             if err:
                 return err
+            if auto_replies:
+                from backend.smtp.outbound import send_direct
+
+                for item in auto_replies:
+                    try:
+                        await send_direct(
+                            from_addr=item["from_addr"],
+                            to_list=[item["to_addr"]],
+                            subject=item["subject"],
+                            body_text=item["body"],
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to send autoresponder reply from=%s to=%s",
+                            item["from_addr"],
+                            item["to_addr"],
+                        )
 
         if remote_rcpts:
             # Do not await relay: aiosmtplib (and the HTTP mail-test client) would block until MX

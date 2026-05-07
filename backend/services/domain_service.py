@@ -49,11 +49,13 @@ def dkim_txt_dns_name(domain: Domain) -> str:
 
 
 def mail_hostname_for_domain(domain: Domain) -> str:
-    """FQDN for MX / mail A record (SMTP_HOSTNAME or mail.<apex>)."""
+    """FQDN for MX / mail A record (domain-scoped, never cross-domain)."""
     mh = (settings.smtp_hostname or "").strip().lower().rstrip(".")
-    if mh:
+    apex = domain.name.lower().rstrip(".")
+    # Only reuse SMTP_HOSTNAME if it belongs to this apex domain.
+    if mh and (mh == apex or mh.endswith(f".{apex}")):
         return mh
-    return f"mail.{domain.name.lower().rstrip('.')}"
+    return f"mail.{apex}"
 
 
 async def fetch_cloudflare_zone_id(api_token: str, domain_name: str) -> str | None:
@@ -117,15 +119,36 @@ async def sync_cloudflare_mail_dns(zone_id: str, api_token: str, domain_id: str)
         return False, str(errs[0].get("message") or errs)
 
     async with httpx.AsyncClient(timeout=45.0) as client:
+        async def list_records(rtype: str, name: str) -> list[dict]:
+            lr = await client.get(api_base, headers=headers, params={"type": rtype, "name": name})
+            lr.raise_for_status()
+            return lr.json().get("result") or []
+
+        async def delete_record(rid: str, label: str) -> None:
+            nonlocal all_ok
+            if not rid:
+                all_ok = False
+                steps.append(f"fail delete {label}: missing record id")
+                return
+            try:
+                dr = await client.delete(f"{api_base}/{rid}", headers=headers)
+                ok, err = await _cf_ok(dr)
+                if not ok:
+                    all_ok = False
+                    steps.append(f"fail delete {label}: {err or dr.text}")
+                else:
+                    steps.append(f"ok delete {label}")
+            except Exception as exc:
+                all_ok = False
+                steps.append(f"fail delete {label}: {exc}")
+
         async def upsert_simple(rtype: str, name: str, body: dict) -> None:
             nonlocal all_ok
             merged = {"type": rtype, "name": name, "ttl": 300, **body}
             if rtype == "A":
                 merged["proxied"] = False
             try:
-                lr = await client.get(api_base, headers=headers, params={"type": rtype, "name": name})
-                lr.raise_for_status()
-                rows = lr.json().get("result") or []
+                rows = await list_records(rtype, name)
                 if rows:
                     rid = rows[0]["id"]
                     pr = await client.patch(f"{api_base}/{rid}", headers=headers, json=merged)
@@ -145,13 +168,14 @@ async def sync_cloudflare_mail_dns(zone_id: str, api_token: str, domain_id: str)
             nonlocal all_ok
             body = {"type": "TXT", "name": apex, "content": spf, "ttl": 300}
             try:
-                lr = await client.get(api_base, headers=headers, params={"type": "TXT", "name": apex})
-                lr.raise_for_status()
-                rows = lr.json().get("result") or []
+                rows = await list_records("TXT", apex)
                 spf_rows = [r for r in rows if "v=spf1" in (r.get("content") or "")]
                 if spf_rows:
                     rid = spf_rows[0]["id"]
                     pr = await client.patch(f"{api_base}/{rid}", headers=headers, json=body)
+                    # Keep only one SPF record at apex.
+                    for extra in spf_rows[1:]:
+                        await delete_record(extra.get("id", ""), f"TXT SPF {apex} duplicate")
                 else:
                     pr = await client.post(api_base, headers=headers, json=body)
                 ok, err = await _cf_ok(pr)
@@ -174,9 +198,7 @@ async def sync_cloudflare_mail_dns(zone_id: str, api_token: str, domain_id: str)
             body = {"type": "MX", "name": apex, "content": mail_host, "priority": 10, "ttl": 300}
             target = mail_host.rstrip(".").lower()
             try:
-                lr = await client.get(api_base, headers=headers, params={"type": "MX", "name": apex})
-                lr.raise_for_status()
-                rows = lr.json().get("result") or []
+                rows = await list_records("MX", apex)
                 ours = [
                     r
                     for r in rows
@@ -187,6 +209,12 @@ async def sync_cloudflare_mail_dns(zone_id: str, api_token: str, domain_id: str)
                     pr = await client.patch(f"{api_base}/{rid}", headers=headers, json=body)
                 else:
                     pr = await client.post(api_base, headers=headers, json=body)
+                # Keep only one MX target for this mail-only domain.
+                for extra in rows:
+                    if (extra.get("content") or "").rstrip(".").lower() != target:
+                        await delete_record(extra.get("id", ""), f"MX {apex} -> {(extra.get('content') or '').strip()}")
+                for extra in ours[1:]:
+                    await delete_record(extra.get("id", ""), f"MX {apex} duplicate -> {target}")
                 ok, err = await _cf_ok(pr)
                 if not ok:
                     all_ok = False
@@ -202,13 +230,130 @@ async def sync_cloudflare_mail_dns(zone_id: str, api_token: str, domain_id: str)
 
         if dkim_txt:
             await upsert_simple("TXT", dkim_fqdn, {"content": dkim_txt})
+            # Remove invalid wildcard DKIM placeholder that often conflicts.
+            try:
+                wildcard_name = f"*._domainkey.{apex}"
+                wildcard_rows = await list_records("TXT", wildcard_name)
+                for r in wildcard_rows:
+                    content = (r.get("content") or "").strip().lower()
+                    if content in ('"v=dkim1; p="', "v=dkim1; p=", '"v=dkim1; p='):
+                        await delete_record(r.get("id", ""), f"TXT {wildcard_name} invalid placeholder")
+            except Exception as exc:
+                all_ok = False
+                steps.append(f"fail cleanup wildcard DKIM {apex}: {exc}")
         else:
             all_ok = False
             steps.append("skip DKIM (no key in DB — recreate domain or restore keys)")
 
         await upsert_simple("TXT", f"_dmarc.{apex}", {"content": dmarc})
+        # Keep only one DMARC record.
+        try:
+            dmarc_rows = await list_records("TXT", f"_dmarc.{apex}")
+            tagged = [r for r in dmarc_rows if "v=dmarc1" in (r.get("content") or "").lower()]
+            for extra in tagged[1:]:
+                await delete_record(extra.get("id", ""), f"TXT _dmarc.{apex} duplicate")
+        except Exception as exc:
+            all_ok = False
+            steps.append(f"fail cleanup DMARC {apex}: {exc}")
 
     msg = "Cloudflare DNS sync completed." if all_ok else "Cloudflare DNS sync finished with errors — see steps."
+    return {"attempted": True, "ok": all_ok, "message": msg, "steps": steps}
+
+
+async def remove_cloudflare_mail_dns(zone_id: str, api_token: str, domain: Domain) -> dict[str, object]:
+    """Delete mail-only DNS records managed by Nex Mail for a domain."""
+    token = api_token.strip()
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    api_base = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"
+    steps: list[str] = []
+    all_ok = True
+
+    apex = domain.name.lower().rstrip(".")
+    mail_host = mail_hostname_for_domain(domain).rstrip(".").lower()
+    selector = domain.dkim_selector or settings.dkim_selector
+    dkim_fqdn = f"{selector}._domainkey.{apex}"
+
+    async def _cf_ok(resp: httpx.Response) -> tuple[bool, str]:
+        try:
+            data = resp.json()
+        except Exception:
+            return False, resp.text or f"HTTP {resp.status_code}"
+        if data.get("success"):
+            return True, ""
+        errs = data.get("errors") or [{}]
+        return False, str(errs[0].get("message") or errs)
+
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        async def list_records(rtype: str, name: str) -> list[dict]:
+            r = await client.get(api_base, headers=headers, params={"type": rtype, "name": name})
+            r.raise_for_status()
+            return r.json().get("result") or []
+
+        async def delete_record(rid: str, label: str) -> None:
+            nonlocal all_ok
+            if not rid:
+                all_ok = False
+                steps.append(f"fail delete {label}: missing record id")
+                return
+            try:
+                dr = await client.delete(f"{api_base}/{rid}", headers=headers)
+                ok, err = await _cf_ok(dr)
+                if ok:
+                    steps.append(f"ok delete {label}")
+                else:
+                    all_ok = False
+                    steps.append(f"fail delete {label}: {err or dr.text}")
+            except Exception as exc:
+                all_ok = False
+                steps.append(f"fail delete {label}: {exc}")
+
+        try:
+            mx_rows = await list_records("MX", apex)
+            for row in mx_rows:
+                target = (row.get("content") or "").rstrip(".").lower()
+                if target == mail_host:
+                    await delete_record(row.get("id", ""), f"MX {apex} -> {target}")
+        except Exception as exc:
+            all_ok = False
+            steps.append(f"fail list MX {apex}: {exc}")
+
+        try:
+            a_rows = await list_records("A", mail_host)
+            for row in a_rows:
+                await delete_record(row.get("id", ""), f"A {mail_host}")
+        except Exception as exc:
+            all_ok = False
+            steps.append(f"fail list A {mail_host}: {exc}")
+
+        try:
+            txt_rows = await list_records("TXT", apex)
+            for row in txt_rows:
+                content = (row.get("content") or "").lower()
+                if "v=spf1" in content:
+                    await delete_record(row.get("id", ""), f"TXT SPF {apex}")
+        except Exception as exc:
+            all_ok = False
+            steps.append(f"fail list TXT {apex}: {exc}")
+
+        try:
+            dkim_rows = await list_records("TXT", dkim_fqdn)
+            for row in dkim_rows:
+                await delete_record(row.get("id", ""), f"TXT DKIM {dkim_fqdn}")
+        except Exception as exc:
+            all_ok = False
+            steps.append(f"fail list TXT {dkim_fqdn}: {exc}")
+
+        try:
+            dmarc_rows = await list_records("TXT", f"_dmarc.{apex}")
+            for row in dmarc_rows:
+                content = (row.get("content") or "").lower()
+                if "v=dmarc1" in content:
+                    await delete_record(row.get("id", ""), f"TXT DMARC _dmarc.{apex}")
+        except Exception as exc:
+            all_ok = False
+            steps.append(f"fail list TXT _dmarc.{apex}: {exc}")
+
+    msg = "Cloudflare mail DNS cleanup completed." if all_ok else "Cloudflare mail DNS cleanup finished with errors."
     return {"attempted": True, "ok": all_ok, "message": msg, "steps": steps}
 
 

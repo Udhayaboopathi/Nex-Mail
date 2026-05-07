@@ -20,6 +20,7 @@ from backend.services.domain_service import (
     dkim_txt_dns_name,
     fetch_cloudflare_zone_id,
     mail_hostname_for_domain,
+    remove_cloudflare_mail_dns,
     sync_cloudflare_mail_dns,
     verify_dns,
 )
@@ -408,19 +409,42 @@ async def update_domain(domain_id: str, payload: UpdateDomainRequest) -> DomainI
 
 
 @router.delete("/domains/{domain_id}")
-async def delete_domain(domain_id: str) -> dict[str, bool]:
+async def delete_domain(domain_id: str) -> dict:
     try:
         domain_uuid = UUID(domain_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid domain id") from exc
 
+    dns_cleanup_attempted = False
+    dns_cleanup_ok = False
+    dns_cleanup_steps: list[str] = []
+
     async with AsyncSessionLocal() as db:
         domain = (await db.execute(select(Domain).where(Domain.id == domain_uuid))).scalar_one_or_none()
         if domain is None:
             raise HTTPException(status_code=404, detail="Domain not found")
+        if domain.cloudflare_zone_id and domain.cloudflare_token_encrypted:
+            dns_cleanup_attempted = True
+            try:
+                token = decrypt_value(domain.cloudflare_token_encrypted)
+                cleanup = await remove_cloudflare_mail_dns(
+                    str(domain.cloudflare_zone_id),
+                    token,
+                    domain,
+                )
+                dns_cleanup_ok = bool(cleanup.get("ok"))
+                dns_cleanup_steps = [str(s) for s in (cleanup.get("steps") or [])]
+            except Exception as exc:
+                dns_cleanup_ok = False
+                dns_cleanup_steps = [f"fail cloudflare cleanup: {exc}"]
         await db.delete(domain)
         await db.commit()
-    return {"ok": True}
+    return {
+        "ok": True,
+        "dns_cleanup_attempted": dns_cleanup_attempted,
+        "dns_cleanup_ok": dns_cleanup_ok if dns_cleanup_attempted else True,
+        "dns_cleanup_steps": dns_cleanup_steps,
+    }
 
 
 @router.post("/domains/{domain_id}/assign-admin", response_model=AssignAdminResponse)

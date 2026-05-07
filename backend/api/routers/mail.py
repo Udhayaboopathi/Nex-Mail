@@ -3,6 +3,7 @@ from email.header import decode_header, make_header
 from email.message import Message
 from email.utils import getaddresses
 from pathlib import Path
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,7 +14,7 @@ from backend.api.deps import require_any_auth
 from backend.config import settings
 from backend.database import AsyncSessionLocal
 from backend.imap import maildir
-from backend.models import Email, Label, Mailbox
+from backend.models import Autoresponder, Email, Label, Mailbox
 from backend.smtp.outbound import send_email as smtp_send_email
 
 router = APIRouter(tags=["mail"])
@@ -91,6 +92,15 @@ class SendEmailRequest(BaseModel):
 class UpdateFlagsRequest(BaseModel):
     is_read: bool | None = None
     is_flagged: bool | None = None
+
+
+class AutoresponderPayload(BaseModel):
+    is_enabled: bool = False
+    subject: str = "Out of Office"
+    body: str | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    reply_once_per_sender: bool = True
 
 
 SYSTEM_FOLDERS = ["inbox", "sent", "drafts", "starred", "spam", "trash", "archive"]
@@ -314,6 +324,77 @@ async def search_mail(
             if len(out) >= 50:
                 return SearchResponse(query=q, items=out)
     return SearchResponse(query=q, items=out)
+
+
+@router.get("/autoresponder", response_model=AutoresponderPayload)
+async def get_autoresponder(user: dict = Depends(require_any_auth)) -> AutoresponderPayload:
+    mailbox = await _mailbox_for_user(user)
+    if mailbox is None:
+        raise HTTPException(status_code=404, detail="Mailbox not found")
+    async with AsyncSessionLocal() as db:
+        row = (
+            await db.execute(select(Autoresponder).where(Autoresponder.mailbox_id == mailbox.id))
+        ).scalar_one_or_none()
+    if row is None:
+        return AutoresponderPayload()
+    return AutoresponderPayload(
+        is_enabled=bool(row.is_enabled),
+        subject=row.subject or "Out of Office",
+        body=row.body,
+        start_date=row.start_date,
+        end_date=row.end_date,
+        reply_once_per_sender=bool(row.reply_once_per_sender),
+    )
+
+
+@router.put("/autoresponder", response_model=AutoresponderPayload)
+async def set_autoresponder(
+    payload: AutoresponderPayload,
+    user: dict = Depends(require_any_auth),
+) -> AutoresponderPayload:
+    mailbox = await _mailbox_for_user(user)
+    if mailbox is None:
+        raise HTTPException(status_code=404, detail="Mailbox not found")
+    if payload.start_date and payload.end_date and payload.end_date < payload.start_date:
+        raise HTTPException(status_code=400, detail="end_date must be on or after start_date")
+    async with AsyncSessionLocal() as db:
+        row = (
+            await db.execute(select(Autoresponder).where(Autoresponder.mailbox_id == mailbox.id))
+        ).scalar_one_or_none()
+        if row is None:
+            row = Autoresponder(mailbox_id=mailbox.id)
+            db.add(row)
+        row.is_enabled = payload.is_enabled
+        row.subject = payload.subject or "Out of Office"
+        row.body = payload.body
+        row.start_date = payload.start_date
+        row.end_date = payload.end_date
+        row.reply_once_per_sender = payload.reply_once_per_sender
+        await db.commit()
+        await db.refresh(row)
+    return AutoresponderPayload(
+        is_enabled=bool(row.is_enabled),
+        subject=row.subject or "Out of Office",
+        body=row.body,
+        start_date=row.start_date,
+        end_date=row.end_date,
+        reply_once_per_sender=bool(row.reply_once_per_sender),
+    )
+
+
+@router.delete("/autoresponder")
+async def delete_autoresponder(user: dict = Depends(require_any_auth)) -> dict:
+    mailbox = await _mailbox_for_user(user)
+    if mailbox is None:
+        raise HTTPException(status_code=404, detail="Mailbox not found")
+    async with AsyncSessionLocal() as db:
+        row = (
+            await db.execute(select(Autoresponder).where(Autoresponder.mailbox_id == mailbox.id))
+        ).scalar_one_or_none()
+        if row is not None:
+            await db.delete(row)
+            await db.commit()
+    return {"ok": True}
 
 
 @router.get("/{folder}", response_model=PaginatedEmailHeaders)
