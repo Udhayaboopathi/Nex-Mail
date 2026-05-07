@@ -219,8 +219,8 @@ export const mailApi = {
 
 // ─── Labels ────────────────────────────────────────────────────────────────
 export const labelsApi = {
-  list: () => get<Label[]>("/api/labels"),
-  create: (name: string, color: string) => post<Label>("/api/labels", { name, color }),
+  list: () => get<Label[]>("/api/labels/"),
+  create: (name: string, color: string) => post<Label>("/api/labels/", { name, color }),
   update: (id: string, data: Partial<Label>) => patch<Label>(`/api/labels/${id}`, data),
   remove: (id: string) => del(`/api/labels/${id}`),
   applyToEmail: (uid: string, label_id: string) =>
@@ -240,9 +240,9 @@ export const rulesApi = {
 
 // ─── Templates ─────────────────────────────────────────────────────────────
 export const templatesApi = {
-  list: () => get<EmailTemplate[]>("/api/templates"),
+  list: () => get<EmailTemplate[]>("/api/templates/"),
   create: (data: Omit<EmailTemplate, "id" | "created_at" | "updated_at">) =>
-    post<EmailTemplate>("/api/templates", data),
+    post<EmailTemplate>("/api/templates/", data),
   update: (id: string, data: Partial<EmailTemplate>) =>
     patch<EmailTemplate>(`/api/templates/${id}`, data),
   remove: (id: string) => del(`/api/templates/${id}`),
@@ -250,8 +250,8 @@ export const templatesApi = {
 
 // ─── Contacts ─────────────────────────────────────────────────────────────
 export const contactsApi = {
-  list: (q = "") => get<Contact[]>(`/api/contacts?q=${encodeURIComponent(q)}`),
-  create: (data: Omit<Contact, "id" | "created_at">) => post<Contact>("/api/contacts", data),
+  list: (q = "") => get<Contact[]>(`/api/contacts/?q=${encodeURIComponent(q)}`),
+  create: (data: Omit<Contact, "id" | "created_at">) => post<Contact>("/api/contacts/", data),
   update: (id: string, data: Partial<Contact>) => patch<Contact>(`/api/contacts/${id}`, data),
   remove: (id: string) => del(`/api/contacts/${id}`),
 };
