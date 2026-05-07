@@ -64,7 +64,7 @@ export function Topbar({ email, domainName, onMenuToggle, onSearchChange, onThem
         {domainName && (
           <span
             title={domainName}
-            className="hidden sm:inline-flex mr-2 px-2.5 py-1 rounded-md border border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-700 dark:text-gray-300"
+            className="inline-flex mr-2 px-2.5 py-1 rounded-md border border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-700 dark:text-gray-300 max-w-[220px] truncate"
           >
             {domainName}
           </span>
