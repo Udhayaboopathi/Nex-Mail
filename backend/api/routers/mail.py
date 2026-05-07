@@ -1,12 +1,15 @@
 from email import message_from_bytes
+from email.message import EmailMessage
 from email.message import Message
 from email.utils import getaddresses
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from backend.api.deps import require_any_auth
+from backend.config import settings
 from backend.database import AsyncSessionLocal
 from backend.imap import maildir
 from backend.models import Label, Mailbox
@@ -116,15 +119,41 @@ async def _mailbox_for_user(user: dict) -> Mailbox | None:
         )).scalar_one_or_none()
 
 
+def _maildir_candidates(mailbox: Mailbox) -> list[str]:
+    local, domain = (mailbox.full_address or "@").split("@", 1)
+    candidates: list[str] = []
+    if mailbox.maildir_path:
+        candidates.append(mailbox.maildir_path)
+    # Canonical layout used by mailbox_service.create_mailbox
+    candidates.append(str(Path(settings.maildir_base) / domain / local))
+    # Legacy fallback layout used by SMTP handler when maildir_path is missing
+    candidates.append(str(Path(settings.maildir_base) / f"{local}_{domain}"))
+    # Keep order, remove duplicates
+    out: list[str] = []
+    for p in candidates:
+        if p and p not in out:
+            out.append(p)
+    return out
+
+
+def _resolve_maildir_path(mailbox: Mailbox) -> str:
+    """Pick an existing Maildir path; otherwise return the canonical path."""
+    for p in _maildir_candidates(mailbox):
+        if Path(p).exists():
+            return p
+    return _maildir_candidates(mailbox)[0]
+
+
 @router.get("/folders", response_model=FolderListResponse)
 async def list_folders(user: dict = Depends(require_any_auth)) -> FolderListResponse:
     """Return folder list and counts from the user's Maildir."""
     folders: list[FolderItem] = [FolderItem(name=f, unread=0, total=0) for f in SYSTEM_FOLDERS]
     mailbox = await _mailbox_for_user(user)
 
-    if mailbox and mailbox.maildir_path:
+    if mailbox:
+        mailbox_path = _resolve_maildir_path(mailbox)
         for i, fname in enumerate(SYSTEM_FOLDERS):
-            entries = maildir.list_messages(mailbox.maildir_path, _folder_to_maildir_name(fname))
+            entries = maildir.list_messages(mailbox_path, _folder_to_maildir_name(fname))
             unread = sum(1 for item in entries if "S" not in item.get("flags", []))
             folders[i] = FolderItem(name=fname, unread=unread, total=len(entries))
 
@@ -145,16 +174,17 @@ async def search_mail(
     if not q or not q.strip():
         return SearchResponse(query=q, items=[])
     mailbox = await _mailbox_for_user(user)
-    if mailbox is None or not mailbox.maildir_path:
+    if mailbox is None:
         return SearchResponse(query=q, items=[])
+    mailbox_path = _resolve_maildir_path(mailbox)
 
     needle = q.strip().lower()
     out: list[SearchResultItem] = []
     for fname in SYSTEM_FOLDERS:
         md_folder = _folder_to_maildir_name(fname)
-        entries = list(reversed(maildir.list_messages(mailbox.maildir_path, md_folder)))
+        entries = list(reversed(maildir.list_messages(mailbox_path, md_folder)))
         for item in entries[:100]:
-            raw = maildir.read_message(mailbox.maildir_path, md_folder, item["uid"])
+            raw = maildir.read_message(mailbox_path, md_folder, item["uid"])
             if raw is None:
                 continue
             msg = message_from_bytes(raw)
@@ -189,11 +219,12 @@ async def list_messages(
         raise HTTPException(status_code=404, detail="Folder not found")
 
     mailbox = await _mailbox_for_user(user)
-    if mailbox is None or not mailbox.maildir_path:
+    if mailbox is None:
         return PaginatedEmailHeaders(items=[], total=0, page=page, limit=limit)
+    mailbox_path = _resolve_maildir_path(mailbox)
 
     md_folder = _folder_to_maildir_name(folder)
-    entries = list(reversed(maildir.list_messages(mailbox.maildir_path, md_folder)))
+    entries = list(reversed(maildir.list_messages(mailbox_path, md_folder)))
     total = len(entries)
     start = (page - 1) * limit
     end = start + limit
@@ -201,7 +232,7 @@ async def list_messages(
 
     items: list[EmailHeaderItem] = []
     for item in page_items:
-        raw = maildir.read_message(mailbox.maildir_path, md_folder, item["uid"])
+        raw = maildir.read_message(mailbox_path, md_folder, item["uid"])
         if raw is None:
             continue
         msg = message_from_bytes(raw)
@@ -250,4 +281,16 @@ async def send_email(
         body_html=payload.body_html,
         from_addr=sender,
     )
+    # Save a local Sent copy so the Sent tab reflects successful sends immediately.
+    sender_mailbox = await _mailbox_for_user(user)
+    if sender_mailbox:
+        mailbox_path = _resolve_maildir_path(sender_mailbox)
+        msg = EmailMessage()
+        msg["From"] = sender
+        msg["To"] = ", ".join(to_list)
+        msg["Subject"] = payload.subject
+        msg.set_content(payload.body_text or "")
+        if payload.body_html:
+            msg.add_alternative(payload.body_html, subtype="html")
+        maildir.write_message(mailbox_path, "Sent", msg.as_bytes(), flags="S")
     return {"message_id": result.get("message_id", "")}
