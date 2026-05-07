@@ -94,6 +94,8 @@ export function ComposeModal({ onClose, replyTo, forwardOf }: ComposeModalProps)
   const [body, setBody] = useState(
     forwardOf ? `\n\n---------- Forwarded message ----------\n${forwardOf.body_text ?? ""}` : ""
   );
+  const [bodyHtml, setBodyHtml] = useState(forwardOf?.body_html ?? "");
+  const [isHtmlMode, setIsHtmlMode] = useState(false);
   const [showCc, setShowCc] = useState(false);
   const [showBcc, setShowBcc] = useState(false);
   const [minimized, setMinimized] = useState(false);
@@ -109,16 +111,48 @@ export function ComposeModal({ onClose, replyTo, forwardOf }: ComposeModalProps)
     return () => clearTimeout(draftTimer.current);
   }, []);
 
+  function htmlToText(html: string): string {
+    return html
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/\s+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
   async function handleSend() {
     if (to.length === 0) { toast("Add at least one recipient", "error"); return; }
     if (!subject.trim()) { toast("Subject is required", "error"); return; }
     setSending(true);
     try {
       if (scheduleAt) {
-        await mailApi.scheduleEmail({ to_addresses: to, cc_addresses: cc, bcc_addresses: bcc, subject, body_text: body, send_at: scheduleAt });
+        await mailApi.scheduleEmail({
+          to_addresses: to,
+          cc_addresses: cc,
+          bcc_addresses: bcc,
+          subject,
+          body_text: isHtmlMode ? htmlToText(bodyHtml) : body,
+          body_html: isHtmlMode ? bodyHtml : null,
+          send_at: scheduleAt,
+        });
         toast("Email scheduled!", "success");
       } else {
-        await mailApi.sendEmail({ to_addresses: to, cc_addresses: cc, bcc_addresses: bcc, subject, body_text: body, reply_to: replyTo?.message_id });
+        await mailApi.sendEmail({
+          to_addresses: to,
+          cc_addresses: cc,
+          bcc_addresses: bcc,
+          subject,
+          body_text: isHtmlMode ? htmlToText(bodyHtml) : body,
+          body_html: isHtmlMode ? bodyHtml : null,
+          reply_to: replyTo?.message_id,
+        });
         toast("Email sent!", "success");
       }
       onClose();
@@ -197,7 +231,11 @@ export function ComposeModal({ onClose, replyTo, forwardOf }: ComposeModalProps)
                   defaultValue=""
                   onChange={(e) => {
                     const tmpl = templates.find((t) => t.id === e.target.value);
-                    if (tmpl) { setSubject(tmpl.subject); setBody(tmpl.body_text ?? ""); }
+                    if (tmpl) {
+                      setSubject(tmpl.subject);
+                      setBody(tmpl.body_text ?? "");
+                      setBodyHtml(tmpl.body_html ?? "");
+                    }
                     e.target.value = "";
                   }}
                   className="text-xs text-gray-400 outline-none bg-transparent cursor-pointer"
@@ -207,16 +245,33 @@ export function ComposeModal({ onClose, replyTo, forwardOf }: ComposeModalProps)
                 </select>
               </div>
             )}
+            <button
+              type="button"
+              onClick={() => setIsHtmlMode((v) => !v)}
+              className="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 text-gray-500 hover:text-indigo-600"
+              title="Switch compose format"
+            >
+              {isHtmlMode ? "Plain" : "HTML"}
+            </button>
           </div>
         </div>
 
         {/* Body */}
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder="Write your message…"
-          className="flex-1 px-4 py-3 text-sm resize-none outline-none bg-transparent text-gray-900 dark:text-gray-100 placeholder-gray-400 min-h-32"
-        />
+        {isHtmlMode ? (
+          <textarea
+            value={bodyHtml}
+            onChange={(e) => setBodyHtml(e.target.value)}
+            placeholder="<p>Write your HTML message…</p>"
+            className="flex-1 px-4 py-3 font-mono text-sm resize-none outline-none bg-transparent text-gray-900 dark:text-gray-100 placeholder-gray-400 min-h-32"
+          />
+        ) : (
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder="Write your message…"
+            className="flex-1 px-4 py-3 text-sm resize-none outline-none bg-transparent text-gray-900 dark:text-gray-100 placeholder-gray-400 min-h-32"
+          />
+        )}
 
         {/* Footer */}
         <div className="flex items-center gap-2 px-4 py-3 border-t border-gray-100 dark:border-gray-800">
