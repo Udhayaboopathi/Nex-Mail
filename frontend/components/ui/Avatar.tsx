@@ -1,4 +1,5 @@
 import { Mail } from "lucide-react";
+import { useMemo, useState } from "react";
 import { cn, colorFromString } from "../../lib/utils";
 
 interface AvatarProps {
@@ -15,8 +16,17 @@ const sizeMap = {
 };
 
 export function Avatar({ email, name, size = "md", className }: AvatarProps) {
+  const [imgFailed, setImgFailed] = useState(false);
   const label = name ?? email;
-  const bg = colorFromString(email);
+  const parsedEmail = useMemo(() => {
+    const m = (email || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+    return (m?.[0] || email || "").trim().toLowerCase();
+  }, [email]);
+  const domain = parsedEmail.includes("@") ? parsedEmail.split("@")[1] : "";
+  const logoUrl = domain
+    ? `${process.env.NEXT_PUBLIC_API_URL ?? ""}/api/public/domain-branding/${domain}/bimi-logo.svg`
+    : "";
+  const bg = colorFromString(parsedEmail || email);
   const iconSize = size === "sm" ? "w-3.5 h-3.5" : size === "md" ? "w-4 h-4" : "w-5 h-5";
 
   return (
@@ -30,7 +40,16 @@ export function Avatar({ email, name, size = "md", className }: AvatarProps) {
       title={label}
       aria-label={label}
     >
-      <Mail className={iconSize} />
+      {!imgFailed && logoUrl ? (
+        <img
+          src={logoUrl}
+          alt={domain || "logo"}
+          className="w-full h-full object-cover"
+          onError={() => setImgFailed(true)}
+        />
+      ) : (
+        <Mail className={iconSize} />
+      )}
     </span>
   );
 }
