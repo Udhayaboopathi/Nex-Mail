@@ -1,18 +1,18 @@
 from email import message_from_bytes
-from email.message import EmailMessage
 from email.message import Message
 from email.utils import getaddresses
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from backend.api.deps import require_any_auth
 from backend.config import settings
 from backend.database import AsyncSessionLocal
 from backend.imap import maildir
-from backend.models import Label, Mailbox
+from backend.models import Email, Label, Mailbox
 from backend.smtp.outbound import send_email as smtp_send_email
 
 router = APIRouter(tags=["mail"])
@@ -194,11 +194,29 @@ async def list_folders(user: dict = Depends(require_any_auth)) -> FolderListResp
     mailbox = await _mailbox_for_user(user)
 
     if mailbox:
-        mailbox_path = _resolve_maildir_path(mailbox)
+        async with AsyncSessionLocal() as db:
+            counts = (
+                await db.execute(
+                    select(Email.folder, func.count())
+                    .where(Email.mailbox_id == mailbox.id)
+                    .group_by(Email.folder)
+                )
+            ).all()
+            unread_counts = (
+                await db.execute(
+                    select(Email.folder, func.count())
+                    .where(Email.mailbox_id == mailbox.id, Email.is_read == False)
+                    .group_by(Email.folder)
+                )
+            ).all()
+        count_map = {str(folder).lower(): int(total) for folder, total in counts}
+        unread_map = {str(folder).lower(): int(total) for folder, total in unread_counts}
         for i, fname in enumerate(SYSTEM_FOLDERS):
-            entries = maildir.list_messages(mailbox_path, _folder_to_maildir_name(fname))
-            unread = sum(1 for item in entries if "S" not in item.get("flags", []))
-            folders[i] = FolderItem(name=fname, unread=unread, total=len(entries))
+            folders[i] = FolderItem(
+                name=fname,
+                unread=unread_map.get(fname, 0),
+                total=count_map.get(fname, 0),
+            )
 
     if mailbox:
         async with AsyncSessionLocal() as db:
@@ -222,7 +240,36 @@ async def search_mail(
     mailbox = await _mailbox_for_user(user)
     if mailbox is None:
         return SearchResponse(query=q, items=[])
-    mailbox_path = _resolve_maildir_path(mailbox)
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(Email)
+                .where(
+                    Email.mailbox_id == mailbox.id,
+                    or_(
+                        Email.subject.ilike(f"%{q.strip()}%"),
+                        Email.from_address.ilike(f"%{q.strip()}%"),
+                        Email.body_text.ilike(f"%{q.strip()}%"),
+                    ),
+                )
+                .order_by(Email.created_at.desc())
+                .limit(50)
+            )
+        ).scalars().all()
+    if rows:
+        return SearchResponse(
+            query=q,
+            items=[
+                SearchResultItem(
+                    uid=str(e.id),
+                    subject=str(e.subject or "(no subject)"),
+                    from_address=str(e.from_address or ""),
+                    preview=(" ".join((e.body_text or "").strip().split())[:200]),
+                    folder=str(e.folder or "inbox"),
+                )
+                for e in rows
+            ],
+        )
 
     needle = q.strip().lower()
     out: list[SearchResultItem] = []
@@ -267,6 +314,44 @@ async def list_messages(
     mailbox = await _mailbox_for_user(user)
     if mailbox is None:
         return PaginatedEmailHeaders(items=[], total=0, page=page, limit=limit)
+    async with AsyncSessionLocal() as db:
+        total = int(
+            await db.scalar(
+                select(func.count())
+                .where(Email.mailbox_id == mailbox.id, Email.folder == folder)
+            )
+            or 0
+        )
+        rows = (
+            await db.execute(
+                select(Email)
+                .where(Email.mailbox_id == mailbox.id, Email.folder == folder)
+                .order_by(Email.created_at.desc())
+                .offset((page - 1) * limit)
+                .limit(limit)
+            )
+        ).scalars().all()
+    if rows:
+        return PaginatedEmailHeaders(
+            items=[
+                EmailHeaderItem(
+                    uid=str(e.id),
+                    from_=str(e.from_address or ""),
+                    to=list(e.to_addresses or []),
+                    subject=str(e.subject or "(no subject)"),
+                    date=(e.sent_at or e.created_at).isoformat() if (e.sent_at or e.created_at) else "",
+                    is_read=bool(e.is_read),
+                    is_flagged=bool(e.is_flagged),
+                    has_attachments=bool(e.has_attachments),
+                    folder=str(e.folder or folder),
+                    preview=(" ".join((e.body_text or "").strip().split())[:200]),
+                )
+                for e in rows
+            ],
+            total=total,
+            page=page,
+            limit=limit,
+        )
     mailbox_path = _resolve_maildir_path(mailbox)
 
     md_folder = _folder_to_maildir_name(folder)
@@ -314,6 +399,45 @@ async def get_message(
     mailbox = await _mailbox_for_user(user)
     if mailbox is None:
         raise HTTPException(status_code=404, detail="Mailbox not found")
+    db_uid = None
+    try:
+        db_uid = UUID(uid)
+    except ValueError:
+        db_uid = None
+    async with AsyncSessionLocal() as db:
+        db_msg = None
+        if db_uid is not None:
+            db_msg = (
+                await db.execute(
+                    select(Email).where(
+                        Email.id == db_uid,
+                        Email.mailbox_id == mailbox.id,
+                        Email.folder == folder,
+                    )
+                )
+            ).scalar_one_or_none()
+    if db_msg is not None:
+        return EmailFullItem(
+            uid=str(db_msg.id),
+            from_=str(db_msg.from_address or ""),
+            to=list(db_msg.to_addresses or []),
+            subject=str(db_msg.subject or "(no subject)"),
+            date=(db_msg.sent_at or db_msg.created_at).isoformat() if (db_msg.sent_at or db_msg.created_at) else "",
+            is_read=bool(db_msg.is_read),
+            is_flagged=bool(db_msg.is_flagged),
+            has_attachments=bool(db_msg.has_attachments),
+            folder=str(db_msg.folder or folder),
+            preview=(" ".join((db_msg.body_text or "").strip().split())[:200]),
+            body_text=db_msg.body_text,
+            body_html=db_msg.body_html,
+            cc=list(db_msg.cc_addresses or []),
+            bcc=list(db_msg.bcc_addresses or []),
+            reply_to=None,
+            message_id=str(db_msg.message_id or db_msg.id),
+            attachments=[],
+            read_receipt_token=None,
+            is_pgp_encrypted=False,
+        )
     mailbox_path = _resolve_maildir_path(mailbox)
 
     md_folder = _folder_to_maildir_name(folder)
@@ -380,16 +504,4 @@ async def send_email(
         body_html=payload.body_html,
         from_addr=sender,
     )
-    # Save a local Sent copy so the Sent tab reflects successful sends immediately.
-    sender_mailbox = await _mailbox_for_user(user)
-    if sender_mailbox:
-        mailbox_path = _resolve_maildir_path(sender_mailbox)
-        msg = EmailMessage()
-        msg["From"] = sender
-        msg["To"] = ", ".join(to_list)
-        msg["Subject"] = payload.subject
-        msg.set_content(payload.body_text or "")
-        if payload.body_html:
-            msg.add_alternative(payload.body_html, subtype="html")
-        maildir.write_message(mailbox_path, "Sent", msg.as_bytes(), flags="S")
     return {"message_id": result.get("message_id", "")}

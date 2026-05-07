@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from backend.core.encryption import decrypt_value
 from backend.database import AsyncSessionLocal
-from backend.models import Domain, Mailbox, UnsubscribeList
+from backend.models import Domain, Email, Mailbox, UnsubscribeList
 from backend.smtp.dkim import sign_message
 
 logger = logging.getLogger(__name__)
@@ -148,6 +148,31 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
 
     if failed and len(failed) == len(to_list):
         raise SMTPDeliveryError(f'Failed all recipients: {failed}.{_smtp_delivery_hint()}')
+
+    # Persist sender-side Sent copy in DB.
+    if sender_mailbox_id is not None:
+        delivered_to = [r for r in to_list if r not in failed]
+        async with AsyncSessionLocal() as db:
+            db.add(
+                Email(
+                    mailbox_id=sender_mailbox_id,
+                    folder="sent",
+                    from_address=from_addr,
+                    to_addresses=to_list,
+                    cc_addresses=[],
+                    bcc_addresses=[],
+                    subject=subject,
+                    body_text=body_text,
+                    body_html=body_html,
+                    message_id=str(msg.get("Message-ID") or ""),
+                    flags=["S"],
+                    is_read=True,
+                    is_flagged=False,
+                    has_attachments=bool(attachments),
+                    headers={"delivered_to": delivered_to, "failed_recipients": failed},
+                )
+            )
+            await db.commit()
 
     return {'success': len(failed) == 0, 'message_id': msg['Message-ID'], 'failed_recipients': failed}
 

@@ -153,6 +153,25 @@ class EmailThread(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     message_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     has_unread: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
 
+class Email(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
+    __tablename__ = "emails"
+    mailbox_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("mailboxes.id", ondelete="CASCADE"), nullable=False)
+    folder: Mapped[str] = mapped_column(String(50), nullable=False, server_default="inbox")
+    from_address: Mapped[str | None] = mapped_column(String(319))
+    to_addresses: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    cc_addresses: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    bcc_addresses: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    subject: Mapped[str | None] = mapped_column(String)
+    body_text: Mapped[str | None] = mapped_column(Text)
+    body_html: Mapped[str | None] = mapped_column(Text)
+    message_id: Mapped[str | None] = mapped_column(String(255))
+    flags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    is_flagged: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    has_attachments: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    headers: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 class Label(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     __tablename__ = "labels"
     __table_args__ = (UniqueConstraint("mailbox_id", "name", name="uq_labels_mailbox_id_name"),)

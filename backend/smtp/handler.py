@@ -4,6 +4,7 @@ import asyncio
 import email
 import logging
 from email.message import Message
+from email.utils import getaddresses
 from mailbox import Maildir
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.database_sync import SessionLocalSync
-from backend.models import Alias, Domain, Mailbox
+from backend.models import Alias, Domain, Email, Mailbox
 from backend.smtp.dkim import verify_message
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,30 @@ def _store_to_maildir(maildir_path: str, parsed: Message, folder: str) -> None:
     target.mkdir(parents=True, exist_ok=True)
     maildir = Maildir(target.as_posix(), create=True)
     maildir.add(parsed.as_bytes())
+
+
+def _extract_bodies(parsed: Message) -> tuple[str | None, str | None]:
+    body_text: str | None = None
+    body_html: str | None = None
+    if parsed.is_multipart():
+        for part in parsed.walk():
+            if part.get_filename():
+                continue
+            ctype = part.get_content_type()
+            payload = part.get_payload(decode=True) or b""
+            text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+            if ctype == "text/plain" and body_text is None:
+                body_text = text
+            elif ctype == "text/html" and body_html is None:
+                body_html = text
+    else:
+        payload = parsed.get_payload(decode=True) or b""
+        text = payload.decode(parsed.get_content_charset() or "utf-8", errors="replace")
+        if parsed.get_content_type() == "text/html":
+            body_html = text
+        else:
+            body_text = text
+    return body_text, body_html
 
 
 def _resolve_recipient_sync(db: Session, recipient: str):
@@ -87,6 +112,11 @@ def _deliver_data_sync(envelope_rcpt_tos: list[str], envelope_content: bytes, pa
         return "552 message too large"
 
     with SessionLocalSync() as db:
+        body_text, body_html = _extract_bodies(parsed)
+        hdr_to = [a for _, a in getaddresses([str(parsed.get("To") or "")]) if a]
+        hdr_cc = [a for _, a in getaddresses([str(parsed.get("Cc") or "")]) if a]
+        hdr_bcc = [a for _, a in getaddresses([str(parsed.get("Bcc") or "")]) if a]
+        has_attachments = any(p.get_filename() for p in parsed.walk()) if parsed.is_multipart() else False
         for rcpt in envelope_rcpt_tos:
             resolved = _resolve_recipient_sync(db, rcpt)
             if resolved is None:
@@ -98,6 +128,25 @@ def _deliver_data_sync(envelope_rcpt_tos: list[str], envelope_content: bytes, pa
                 mailbox.maildir_path or _fallback_maildir_path(mailbox.full_address),
                 parsed,
                 target_folder,
+            )
+            db.add(
+                Email(
+                    mailbox_id=mailbox.id,
+                    folder=target_folder.lower(),
+                    from_address=str(parsed.get("From") or ""),
+                    to_addresses=hdr_to or [rcpt],
+                    cc_addresses=hdr_cc,
+                    bcc_addresses=hdr_bcc,
+                    subject=str(parsed.get("Subject") or ""),
+                    body_text=body_text,
+                    body_html=body_html,
+                    message_id=str(parsed.get("Message-ID") or ""),
+                    flags=[],
+                    is_read=False,
+                    is_flagged=False,
+                    has_attachments=has_attachments,
+                    headers={k: str(v) for k, v in parsed.items()},
+                )
             )
             mailbox.used_mb = float(mailbox.used_mb or 0) + (len(envelope_content) / (1024 * 1024))
         db.commit()
