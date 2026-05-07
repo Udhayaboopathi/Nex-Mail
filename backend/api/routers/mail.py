@@ -1,4 +1,5 @@
 from email import message_from_bytes
+from email.header import decode_header, make_header
 from email.message import Message
 from email.utils import getaddresses
 from pathlib import Path
@@ -150,6 +151,15 @@ def _extract_body(msg: Message) -> tuple[str | None, str | None]:
     return body_text, body_html
 
 
+def _decode_mime_header(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        return str(make_header(decode_header(value)))
+    except Exception:
+        return value
+
+
 async def _mailbox_for_user(user: dict) -> Mailbox | None:
     email = (user.get("email") or "").strip().lower()
     user_id = (user.get("id") or "").strip()
@@ -267,8 +277,8 @@ async def search_mail(
             items=[
                 SearchResultItem(
                     uid=str(e.id),
-                    subject=str(e.subject or "(no subject)"),
-                    from_address=str(e.from_address or ""),
+                    subject=_decode_mime_header(str(e.subject or "(no subject)")),
+                    from_address=_decode_mime_header(str(e.from_address or "")),
                     preview=(" ".join((e.body_text or "").strip().split())[:200]),
                     folder=str(e.folder or "inbox"),
                 )
@@ -278,6 +288,7 @@ async def search_mail(
 
     needle = q.strip().lower()
     out: list[SearchResultItem] = []
+    mailbox_path = _resolve_maildir_path(mailbox)
     for fname in SYSTEM_FOLDERS:
         md_folder = _folder_to_maildir_name(fname)
         entries = list(reversed(maildir.list_messages(mailbox_path, md_folder)))
@@ -286,8 +297,8 @@ async def search_mail(
             if raw is None:
                 continue
             msg = message_from_bytes(raw)
-            subject = str(msg.get("Subject") or "(no subject)")
-            from_addr = str(msg.get("From") or "")
+            subject = _decode_mime_header(str(msg.get("Subject") or "(no subject)"))
+            from_addr = _decode_mime_header(str(msg.get("From") or ""))
             preview = _message_preview(msg)
             hay = f"{subject}\n{from_addr}\n{preview}".lower()
             if needle in hay:
@@ -341,9 +352,9 @@ async def list_messages(
             items=[
                 EmailHeaderItem(
                     uid=str(e.id),
-                    from_=str(e.from_address or ""),
+                    from_=_decode_mime_header(str(e.from_address or "")),
                     to=list(e.to_addresses or []),
-                    subject=str(e.subject or "(no subject)"),
+                    subject=_decode_mime_header(str(e.subject or "(no subject)")),
                     date=(e.sent_at or e.created_at).isoformat() if (e.sent_at or e.created_at) else "",
                     is_read=bool(e.is_read),
                     is_flagged=bool(e.is_flagged),
@@ -377,9 +388,9 @@ async def list_messages(
         items.append(
             EmailHeaderItem(
                 uid=item["uid"],
-                from_=str(msg.get("From") or ""),
+                from_=_decode_mime_header(str(msg.get("From") or "")),
                 to=to_list,
-                subject=str(msg.get("Subject") or "(no subject)"),
+                subject=_decode_mime_header(str(msg.get("Subject") or "(no subject)")),
                 date=str(msg.get("Date") or ""),
                 is_read="S" in flags,
                 is_flagged="F" in flags,
@@ -424,9 +435,9 @@ async def get_message(
     if db_msg is not None:
         return EmailFullItem(
             uid=str(db_msg.id),
-            from_=str(db_msg.from_address or ""),
+            from_=_decode_mime_header(str(db_msg.from_address or "")),
             to=list(db_msg.to_addresses or []),
-            subject=str(db_msg.subject or "(no subject)"),
+            subject=_decode_mime_header(str(db_msg.subject or "(no subject)")),
             date=(db_msg.sent_at or db_msg.created_at).isoformat() if (db_msg.sent_at or db_msg.created_at) else "",
             is_read=bool(db_msg.is_read),
             is_flagged=bool(db_msg.is_flagged),
@@ -463,9 +474,9 @@ async def get_message(
 
     return EmailFullItem(
         uid=uid,
-        from_=str(msg.get("From") or ""),
+        from_=_decode_mime_header(str(msg.get("From") or "")),
         to=to_list,
-        subject=str(msg.get("Subject") or "(no subject)"),
+        subject=_decode_mime_header(str(msg.get("Subject") or "(no subject)")),
         date=str(msg.get("Date") or ""),
         is_read="S" in flags,
         is_flagged="F" in flags,
