@@ -16,11 +16,16 @@ interface WhitelabelRaw {
 }
 
 export function useWhitelabel() {
-  const [data, setData] = useState<WhitelabelConfig>({ companyName: "Nex Mail", primaryColor: "#6366f1", logoUrl: "" });
+  const [data, setData] = useState<WhitelabelConfig>({
+    companyName: "Nex Mail",
+    primaryColor: "#6366f1",
+    logoUrl: "",
+  });
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    domainAdminApi.getWhitelabel()
+    domainAdminApi
+      .getWhitelabel()
       .then((raw) => {
         const r = raw as WhitelabelRaw;
         setData({

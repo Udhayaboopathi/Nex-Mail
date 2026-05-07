@@ -71,15 +71,21 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl mb-4 shadow-lg">
             <Mail className="w-7 h-7 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Nex Mail</h1>
-          <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">Sign in to your account</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            Nex Mail
+          </h1>
+          <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
+            Sign in to your account
+          </p>
         </div>
 
         <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl border border-gray-100 dark:border-gray-800 p-8">
           {!totpStep ? (
             <form onSubmit={handleLogin} className="space-y-5">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Email</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                  Email
+                </label>
                 <input
                   type="email"
                   value={email}
@@ -91,7 +97,9 @@ export default function LoginPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Password</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                  Password
+                </label>
                 <div className="relative">
                   <input
                     type={showPw ? "text" : "password"}
@@ -102,8 +110,16 @@ export default function LoginPage() {
                     className="w-full px-4 py-2.5 pr-11 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400 text-sm"
                     placeholder="••••••••"
                   />
-                  <button type="button" onClick={() => setShowPw((o) => !o)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
-                    {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  <button
+                    type="button"
+                    onClick={() => setShowPw((o) => !o)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                  >
+                    {showPw ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
                   </button>
                 </div>
               </div>
@@ -119,9 +135,13 @@ export default function LoginPage() {
 
               <div className="flex items-start justify-between gap-3 text-sm">
                 <label className="flex items-center gap-2 cursor-pointer text-gray-600 dark:text-gray-400 shrink-0">
-                  <input type="checkbox" className="accent-indigo-600" /> Remember me
+                  <input type="checkbox" className="accent-indigo-600" />{" "}
+                  Remember me
                 </label>
-                <Link href="/forgot-password" className="text-indigo-600 dark:text-indigo-400 hover:underline whitespace-nowrap">
+                <Link
+                  href="/forgot-password"
+                  className="text-indigo-600 dark:text-indigo-400 hover:underline whitespace-nowrap"
+                >
                   Forgot password?
                 </Link>
               </div>
@@ -137,21 +157,41 @@ export default function LoginPage() {
           ) : (
             <form onSubmit={handleTotp} className="space-y-5">
               <div className="text-center">
-                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Two-factor authentication</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Enter the 6-digit code from your authenticator app.</p>
+                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Two-factor authentication
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Enter the 6-digit code from your authenticator app.
+                </p>
               </div>
               <input
                 value={totpCode}
-                onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                onChange={(e) =>
+                  setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+                }
                 placeholder="000000"
                 maxLength={6}
                 className="w-full px-4 py-3 text-center text-2xl tracking-widest rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400"
               />
-              {error && <p className="text-sm text-red-600 dark:text-red-400 text-center">{error}</p>}
-              <button type="submit" disabled={loading || totpCode.length < 6} className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium disabled:opacity-60">
+              {error && (
+                <p className="text-sm text-red-600 dark:text-red-400 text-center">
+                  {error}
+                </p>
+              )}
+              <button
+                type="submit"
+                disabled={loading || totpCode.length < 6}
+                className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium disabled:opacity-60"
+              >
                 {loading ? "Verifying…" : "Verify"}
               </button>
-              <button type="button" onClick={() => setTotpStep(false)} className="w-full text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">← Back to login</button>
+              <button
+                type="button"
+                onClick={() => setTotpStep(false)}
+                className="w-full text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+              >
+                ← Back to login
+              </button>
             </form>
           )}
         </div>
