@@ -50,6 +50,18 @@ class PaginatedEmailHeaders(BaseModel):
     limit: int
 
 
+class EmailFullItem(EmailHeaderItem):
+    body_html: str | None = None
+    body_text: str | None = None
+    cc: list[str] = []
+    bcc: list[str] = []
+    reply_to: str | None = None
+    message_id: str = ""
+    attachments: list[dict] = []
+    read_receipt_token: str | None = None
+    is_pgp_encrypted: bool = False
+
+
 class SearchResultItem(BaseModel):
     uid: str
     subject: str
@@ -107,6 +119,30 @@ def _message_has_attachments(msg: Message) -> bool:
     if not msg.is_multipart():
         return False
     return any(part.get_filename() for part in msg.walk())
+
+
+def _extract_body(msg: Message) -> tuple[str | None, str | None]:
+    body_text: str | None = None
+    body_html: str | None = None
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_filename():
+                continue
+            ctype = part.get_content_type()
+            payload = part.get_payload(decode=True) or b""
+            text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+            if ctype == "text/plain" and body_text is None:
+                body_text = text
+            elif ctype == "text/html" and body_html is None:
+                body_html = text
+    else:
+        payload = msg.get_payload(decode=True) or b""
+        text = payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
+        if msg.get_content_type() == "text/html":
+            body_html = text
+        else:
+            body_text = text
+    return body_text, body_html
 
 
 async def _mailbox_for_user(user: dict) -> Mailbox | None:
@@ -264,6 +300,59 @@ async def list_messages(
         )
 
     return PaginatedEmailHeaders(items=items, total=total, page=page, limit=limit)
+
+
+@router.get("/{folder}/{uid}", response_model=EmailFullItem)
+async def get_message(
+    folder: str,
+    uid: str,
+    user: dict = Depends(require_any_auth),
+) -> EmailFullItem:
+    if folder not in SYSTEM_FOLDERS:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    mailbox = await _mailbox_for_user(user)
+    if mailbox is None:
+        raise HTTPException(status_code=404, detail="Mailbox not found")
+    mailbox_path = _resolve_maildir_path(mailbox)
+
+    md_folder = _folder_to_maildir_name(folder)
+    raw = maildir.read_message(mailbox_path, md_folder, uid)
+    if raw is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    msg = message_from_bytes(raw)
+    flags = []
+    for item in maildir.list_messages(mailbox_path, md_folder):
+        if item.get("uid") == uid:
+            flags = item.get("flags", [])
+            break
+    to_list = [addr for _, addr in getaddresses([str(msg.get("To") or "")]) if addr]
+    cc_list = [addr for _, addr in getaddresses([str(msg.get("Cc") or "")]) if addr]
+    bcc_list = [addr for _, addr in getaddresses([str(msg.get("Bcc") or "")]) if addr]
+    body_text, body_html = _extract_body(msg)
+
+    return EmailFullItem(
+        uid=uid,
+        from_=str(msg.get("From") or ""),
+        to=to_list,
+        subject=str(msg.get("Subject") or "(no subject)"),
+        date=str(msg.get("Date") or ""),
+        is_read="S" in flags,
+        is_flagged="F" in flags,
+        has_attachments=_message_has_attachments(msg),
+        folder=folder,
+        preview=_message_preview(msg),
+        body_text=body_text,
+        body_html=body_html,
+        cc=cc_list,
+        bcc=bcc_list,
+        reply_to=str(msg.get("Reply-To") or "") or None,
+        message_id=str(msg.get("Message-ID") or uid),
+        attachments=[],
+        read_receipt_token=None,
+        is_pgp_encrypted=False,
+    )
 
 
 @router.post("/send")
