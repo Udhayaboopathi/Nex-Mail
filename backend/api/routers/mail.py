@@ -1,10 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select
 
 from backend.api.deps import require_any_auth
 from backend.database import AsyncSessionLocal
-from backend.models import Label, Mailbox
+from backend.models import Label
 
 router = APIRouter(tags=["mail"])
 
@@ -18,6 +17,29 @@ class FolderItem(BaseModel):
 
 class FolderListResponse(BaseModel):
     folders: list[FolderItem]
+
+
+class EmailHeaderItem(BaseModel):
+    uid: str
+    from_: str
+    to: list[str]
+    subject: str
+    date: str
+    is_read: bool
+    is_flagged: bool
+    has_attachments: bool
+    folder: str
+    preview: str
+
+    class Config:
+        fields = {"from_": "from"}
+
+
+class PaginatedEmailHeaders(BaseModel):
+    items: list[EmailHeaderItem]
+    total: int
+    page: int
+    limit: int
 
 
 class SearchResultItem(BaseModel):
@@ -38,40 +60,32 @@ SYSTEM_FOLDERS = ["inbox", "sent", "drafts", "starred", "spam", "trash", "archiv
 
 @router.get("/folders", response_model=FolderListResponse)
 async def list_folders(user: dict = Depends(require_any_auth)) -> FolderListResponse:
+    """Return folder list and counts. Currently returns zero counts plus label folders."""
     folders: list[FolderItem] = [FolderItem(name=f, unread=0, total=0) for f in SYSTEM_FOLDERS]
 
     async with AsyncSessionLocal() as db:
-        try:
-            from backend.models.all_models import Email
-            mailbox = (await db.execute(
-                select(Mailbox).limit(1)
-            )).scalar_one_or_none()
-
-            if mailbox:
-                mid = mailbox.id
-                for i, fname in enumerate(SYSTEM_FOLDERS):
-                    total = int(await db.scalar(
-                        select(func.count()).where(
-                            Email.mailbox_id == mid,
-                            Email.folder == fname,
-                        )
-                    ) or 0)
-                    unread = int(await db.scalar(
-                        select(func.count()).where(
-                            Email.mailbox_id == mid,
-                            Email.folder == fname,
-                            Email.is_read == False,
-                        )
-                    ) or 0)
-                    folders[i] = FolderItem(name=fname, unread=unread, total=total)
-        except Exception:
-            pass
-
-        labels = (await db.execute(select(Label).order_by(Label.name.asc()))).scalars().all()
+        labels = (await db.execute(Label.__table__.select().order_by(Label.name.asc()))).scalars().all()
         for lbl in labels:
             folders.append(FolderItem(name=lbl.name or "", unread=0, total=0, color=lbl.color))
 
     return FolderListResponse(folders=folders)
+
+
+@router.get("/{folder}", response_model=PaginatedEmailHeaders)
+async def list_messages(
+    folder: str,
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    user: dict = Depends(require_any_auth),
+) -> PaginatedEmailHeaders:
+    """Stub message listing so the UI does not 404.
+
+    Real email storage is not wired yet, so we return an empty page structure that
+    matches the frontend `Paginated<EmailHeader>` type.
+    """
+    if folder not in SYSTEM_FOLDERS:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    return PaginatedEmailHeaders(items=[], total=0, page=page, limit=limit)
 
 
 @router.get("/search", response_model=SearchResponse)
@@ -79,32 +93,7 @@ async def search_mail(
     q: str = Query(default="", min_length=0),
     user: dict = Depends(require_any_auth),
 ) -> SearchResponse:
+    """Stub search endpoint — returns no results for now."""
     if not q or not q.strip():
         return SearchResponse(query=q, items=[])
-
-    items: list[SearchResultItem] = []
-    try:
-        from backend.models.all_models import Email
-        async with AsyncSessionLocal() as db:
-            like = f"%{q.strip()}%"
-            rows = (await db.execute(
-                select(Email).where(
-                    or_(
-                        Email.subject.ilike(like),
-                        Email.from_address.ilike(like),
-                        Email.body_text.ilike(like),
-                    )
-                ).order_by(Email.sent_at.desc()).limit(25)
-            )).scalars().all()
-            for e in rows:
-                items.append(SearchResultItem(
-                    uid=str(e.id),
-                    subject=e.subject or "(no subject)",
-                    from_address=e.from_address or "",
-                    preview=(e.body_text or "")[:120],
-                    folder=e.folder or "inbox",
-                ))
-    except Exception:
-        pass
-
-    return SearchResponse(query=q, items=items)
+    return SearchResponse(query=q, items=[])
