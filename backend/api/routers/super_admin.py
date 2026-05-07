@@ -89,6 +89,7 @@ class DomainItem(BaseModel):
     used_storage_gb: float
     dns_verified: bool
     dkim_selector: str
+    allow_custom_dkim_signing: bool = False
     # Copy-paste for DNS: TXT name (under your domain zone) and full value.
     dkim_dns_name: str | None = None
     dkim_txt_record: str | None = None
@@ -121,6 +122,7 @@ class UpdateDomainRequest(BaseModel):
     whitelabel_primary_color: str | None = None
     whitelabel_logo_url: str | None = None
     bimi_vmc_url: str | None = None
+    allow_custom_dkim_signing: bool | None = None
     ediscovery_enabled: bool | None = None
 
 
@@ -255,6 +257,7 @@ def _domain_to_item(d: Domain) -> DomainItem:
         used_storage_gb=float(d.used_storage_gb or 0),
         dns_verified=bool(d.dns_verified),
         dkim_selector=d.dkim_selector or "mail",
+        allow_custom_dkim_signing=bool(d.allow_custom_dkim_signing),
         dkim_dns_name=dkim_txt_dns_name(d) if dkim_txt else None,
         dkim_txt_record=dkim_txt,
         cloudflare_auto_dns=bool(d.cloudflare_auto_dns),

@@ -33,6 +33,7 @@ class Domain(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     dns_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dkim_private_key_encrypted: Mapped[str | None] = mapped_column(Text)
     dkim_selector: Mapped[str] = mapped_column(String(63), nullable=False, server_default="mail")
+    allow_custom_dkim_signing: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     spf_record: Mapped[str | None] = mapped_column(Text)
     dmarc_record: Mapped[str | None] = mapped_column(Text)
     admin_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))

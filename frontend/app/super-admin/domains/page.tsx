@@ -93,6 +93,18 @@ export default function DomainsPage() {
     }
   }
 
+  async function handleToggleCustomDkimSigning(d: Domain) {
+    setMenu(null);
+    try {
+      const next = !Boolean(d.allow_custom_dkim_signing);
+      await superAdminApi.updateDomain(d.id, { allow_custom_dkim_signing: next });
+      toast(next ? `${d.name}: custom DKIM signing unlocked` : `${d.name}: custom DKIM signing locked`, "success");
+      load();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  }
+
   const menuItems =
     menuDomain != null
       ? [
@@ -102,6 +114,9 @@ export default function DomainsPage() {
           ...(menuDomain.cloudflare_auto_dns
             ? [{ label: "Push DNS to Cloudflare", fn: () => void handlePushCloudflare(menuDomain) }]
             : []),
+          menuDomain.allow_custom_dkim_signing
+            ? { label: "Lock Signed-By to global domain", fn: () => void handleToggleCustomDkimSigning(menuDomain) }
+            : { label: "Unlock Signed-By for this client", fn: () => void handleToggleCustomDkimSigning(menuDomain) },
           menuDomain.is_suspended
             ? { label: "Unsuspend", fn: () => void handleUnsuspend(menuDomain) }
             : { label: "Suspend", fn: () => void handleSuspend(menuDomain) },
