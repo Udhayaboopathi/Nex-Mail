@@ -64,7 +64,7 @@ const patch = <T>(p: string, b?: unknown) => request<T>("PATCH", p, b);
 const put = <T>(p: string, b?: unknown) => request<T>("PUT", p, b);
 const del = <T>(p: string) => request<T>("DELETE", p);
 
-async function upload(path: string, file: File): Promise<{ [k: string]: string }> {
+async function upload(path: string, file: File): Promise<Record<string, unknown>> {
   const form = new FormData();
   form.append("file", file);
   const res = await fetch(`${BASE}${path}`, {
@@ -83,7 +83,7 @@ async function upload(path: string, file: File): Promise<{ [k: string]: string }
     } catch { /* ignore */ }
     throw new Error(msg);
   }
-  return res.json() as Promise<{ [k: string]: string }>;
+  return res.json() as Promise<Record<string, unknown>>;
 }
 
 // ─── Auth ──────────────────────────────────────────────────────────────────

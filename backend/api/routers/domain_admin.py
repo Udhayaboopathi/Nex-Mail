@@ -6,10 +6,11 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 
 from backend.api.deps import require_any_auth, require_domain_admin
+from backend.core.encryption import decrypt_value
 from backend.database import AsyncSessionLocal
 from backend.models import Alias, AuditLog, Domain, Mailbox, User
 from backend.services.branding_service import save_domain_logo, save_domain_vmc
-from backend.services.domain_service import verify_dns as verify_dns_details
+from backend.services.domain_service import sync_cloudflare_mail_dns, verify_dns as verify_dns_details
 
 router = APIRouter(tags=["domain_admin"])
 
@@ -607,13 +608,17 @@ async def upload_logo(file: UploadFile = File(...), user: dict = Depends(require
         url = await save_domain_logo(d.name, file)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    dns_sync: dict | None = None
     async with AsyncSessionLocal() as db:
         domain = (await db.execute(select(Domain).where(Domain.id == d.id))).scalar_one_or_none()
         if domain is None:
             raise HTTPException(status_code=404, detail="Domain not found")
         domain.whitelabel_logo_url = url
         await db.commit()
-    return {"logo_url": url}
+        if domain.cloudflare_auto_dns and domain.cloudflare_zone_id and domain.cloudflare_token_encrypted:
+            token = decrypt_value(domain.cloudflare_token_encrypted)
+            dns_sync = await sync_cloudflare_mail_dns(str(domain.cloudflare_zone_id), token, str(domain.id))
+    return {"logo_url": url, "dns_sync": dns_sync}
 
 
 @router.post("/whitelabel/vmc-upload")
@@ -625,13 +630,17 @@ async def upload_vmc(file: UploadFile = File(...), user: dict = Depends(require_
         url = await save_domain_vmc(d.name, file)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    dns_sync: dict | None = None
     async with AsyncSessionLocal() as db:
         domain = (await db.execute(select(Domain).where(Domain.id == d.id))).scalar_one_or_none()
         if domain is None:
             raise HTTPException(status_code=404, detail="Domain not found")
         domain.bimi_vmc_url = url
         await db.commit()
-    return {"bimi_vmc_url": url}
+        if domain.cloudflare_auto_dns and domain.cloudflare_zone_id and domain.cloudflare_token_encrypted:
+            token = decrypt_value(domain.cloudflare_token_encrypted)
+            dns_sync = await sync_cloudflare_mail_dns(str(domain.cloudflare_zone_id), token, str(domain.id))
+    return {"bimi_vmc_url": url, "dns_sync": dns_sync}
 
 
 @router.get("/whitelabel/readiness", response_model=BrandingReadiness)

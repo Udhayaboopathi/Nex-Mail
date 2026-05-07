@@ -565,6 +565,7 @@ async def upload_domain_logo(domain_id: str, file: UploadFile = File(...)) -> di
         domain_uuid = UUID(domain_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid domain id") from exc
+    dns_sync: dict | None = None
     async with AsyncSessionLocal() as db:
         domain = (await db.execute(select(Domain).where(Domain.id == domain_uuid))).scalar_one_or_none()
         if domain is None:
@@ -575,7 +576,10 @@ async def upload_domain_logo(domain_id: str, file: UploadFile = File(...)) -> di
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         domain.whitelabel_logo_url = logo_url
         await db.commit()
-    return {"logo_url": logo_url}
+        if domain.cloudflare_auto_dns and domain.cloudflare_zone_id and domain.cloudflare_token_encrypted:
+            token = decrypt_value(domain.cloudflare_token_encrypted)
+            dns_sync = await sync_cloudflare_mail_dns(str(domain.cloudflare_zone_id), token, str(domain.id))
+    return {"logo_url": logo_url, "dns_sync": dns_sync}
 
 
 @router.post("/domains/{domain_id}/branding/vmc-upload")
@@ -584,6 +588,7 @@ async def upload_domain_vmc(domain_id: str, file: UploadFile = File(...)) -> dic
         domain_uuid = UUID(domain_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid domain id") from exc
+    dns_sync: dict | None = None
     async with AsyncSessionLocal() as db:
         domain = (await db.execute(select(Domain).where(Domain.id == domain_uuid))).scalar_one_or_none()
         if domain is None:
@@ -594,7 +599,10 @@ async def upload_domain_vmc(domain_id: str, file: UploadFile = File(...)) -> dic
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         domain.bimi_vmc_url = vmc_url
         await db.commit()
-    return {"bimi_vmc_url": vmc_url}
+        if domain.cloudflare_auto_dns and domain.cloudflare_zone_id and domain.cloudflare_token_encrypted:
+            token = decrypt_value(domain.cloudflare_token_encrypted)
+            dns_sync = await sync_cloudflare_mail_dns(str(domain.cloudflare_zone_id), token, str(domain.id))
+    return {"bimi_vmc_url": vmc_url, "dns_sync": dns_sync}
 
 
 @router.post("/domains/{domain_id}/suspend")

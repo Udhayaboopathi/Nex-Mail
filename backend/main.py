@@ -13,7 +13,7 @@ from backend.api.middleware.rate_limit import add_rate_limiting
 from backend.api.middleware.audit import add_audit_logging
 from backend.smtp.server import create_smtp_servers
 from backend.imap.server import create_imap_server
-from backend.api.routers import auth, super_admin, domain_admin, mail, folders, threads, labels, rules, templates, contacts, calendar, tasks, notes, ai, pgp, campaigns, webhooks, api_keys, send_api, tracking, shared_mailboxes, delegation, spam_reports, ediscovery
+from backend.api.routers import auth, super_admin, domain_admin, mail, folders, threads, labels, rules, templates, contacts, calendar, tasks, notes, ai, pgp, campaigns, webhooks, api_keys, send_api, tracking, shared_mailboxes, delegation, spam_reports, ediscovery, public_assets
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,7 @@ app.include_router(shared_mailboxes.router, prefix="/api/shared-mailboxes")
 app.include_router(delegation.router, prefix="/api/delegation")
 app.include_router(spam_reports.router, prefix="/api/mail/report")
 app.include_router(ediscovery.router, prefix="/api/admin/ediscovery")
+app.include_router(public_assets.router, prefix="/api/public")
 
 branding_root = Path(__file__).resolve().parent.parent / "data" / "domain-branding"
 from backend.config import settings

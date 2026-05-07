@@ -46,7 +46,8 @@ export default function WhitelabelPage() {
     setUploadingLogo(true);
     try {
       const r = await domainAdminApi.uploadLogo(file);
-      setForm((p) => ({ ...p, logo_url: r.logo_url || p.logo_url }));
+      const logoUrl = typeof r.logo_url === "string" ? r.logo_url : "";
+      setForm((p) => ({ ...p, logo_url: logoUrl || p.logo_url }));
       toast("Logo uploaded", "success");
     } catch (e) {
       toast((e as Error).message, "error");
@@ -60,7 +61,8 @@ export default function WhitelabelPage() {
     setUploadingVmc(true);
     try {
       const r = await domainAdminApi.uploadVmc(file);
-      setForm((p) => ({ ...p, bimi_vmc_url: r.bimi_vmc_url || p.bimi_vmc_url }));
+      const vmcUrl = typeof r.bimi_vmc_url === "string" ? r.bimi_vmc_url : "";
+      setForm((p) => ({ ...p, bimi_vmc_url: vmcUrl || p.bimi_vmc_url }));
       toast("VMC uploaded", "success");
     } catch (e) {
       toast((e as Error).message, "error");
