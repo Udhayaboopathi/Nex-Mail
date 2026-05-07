@@ -13,8 +13,11 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("mailboxes", sa.Column("display_name", sa.String(200), nullable=True))
-
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    cols = {c["name"] for c in inspector.get_columns("mailboxes")}
+    if "display_name" not in cols:
+        op.add_column("mailboxes", sa.Column("display_name", sa.String(200), nullable=True))
 
 def downgrade() -> None:
     op.drop_column("mailboxes", "display_name")
