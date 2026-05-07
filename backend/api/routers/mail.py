@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from backend.api.deps import require_any_auth
 from backend.database import AsyncSessionLocal
 from backend.models import Label
+from backend.smtp.outbound import send_email as smtp_send_email
 
 router = APIRouter(tags=["mail"])
 
@@ -55,6 +56,13 @@ class SearchResponse(BaseModel):
     items: list[SearchResultItem]
 
 
+class SendEmailRequest(BaseModel):
+    to: list[str]
+    subject: str
+    body_text: str = ""
+    body_html: str | None = None
+
+
 SYSTEM_FOLDERS = ["inbox", "sent", "drafts", "starred", "spam", "trash", "archive"]
 
 
@@ -97,3 +105,26 @@ async def search_mail(
     if not q or not q.strip():
         return SearchResponse(query=q, items=[])
     return SearchResponse(query=q, items=[])
+
+
+@router.post("/send")
+async def send_email(
+    payload: SendEmailRequest,
+    user: dict = Depends(require_any_auth),
+) -> dict:
+    """Send an email for the authenticated user.
+
+    This wires the compose UI's POST /api/mail/send to the SMTP delivery helper.
+    """
+    sender = user.get("email") or user.get("username") or ""
+    if not sender:
+        raise HTTPException(status_code=400, detail="Sender address not available for this user")
+
+    result = await smtp_send_email(
+        to=payload.to,
+        subject=payload.subject,
+        body_text=payload.body_text,
+        body_html=payload.body_html,
+        from_addr=sender,
+    )
+    return {"message_id": result.get("message_id", "")}
