@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     dkim_selector: str = "mail"
     server_ip: str = ""  # .env SERVER_IP — used when pushing mail A record to Cloudflare
     smtp_hostname: str = ""  # .env SMTP_HOSTNAME — MX/A host (default mail.<apex> if empty)
+    # Optional: force all outbound DKIM signing to this domain (e.g. sudoinnovation.tech).
+    dkim_signing_domain: str = ""
     cloudflare_api_token: str = ""
     backup_retention_days: int = 7
     backup_schedule_hour: int = 2

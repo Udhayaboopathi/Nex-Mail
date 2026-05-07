@@ -10,6 +10,7 @@ import aiosmtplib
 import dns.resolver
 from sqlalchemy import select
 
+from backend.config import settings
 from backend.core.encryption import decrypt_value
 from backend.database import AsyncSessionLocal
 from backend.models import Domain, Email, Mailbox, UnsubscribeList
@@ -55,8 +56,15 @@ async def _is_unsubscribed(sender_mailbox_id, recipient: str) -> bool:
         return result.scalar_one_or_none() is not None
 
 
+def _dkim_domain_for_from(from_addr: str) -> str:
+    forced = (settings.dkim_signing_domain or "").strip().lower().rstrip(".")
+    if forced:
+        return forced[5:] if forced.startswith("mail.") else forced
+    return from_addr.split("@")[-1].lower().strip()
+
+
 async def _load_dkim_key(from_addr: str) -> tuple[str, bytes] | None:
-    domain_name = from_addr.split('@')[-1].lower()
+    domain_name = _dkim_domain_for_from(from_addr)
     async with AsyncSessionLocal() as db:
         domain_result = await db.execute(select(Domain).where(Domain.name == domain_name))
         domain = domain_result.scalar_one_or_none()
@@ -99,7 +107,7 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
     raw = msg.as_bytes()
     if dkim_data:
         selector, private_key = dkim_data
-        raw = sign_message(raw, selector, from_addr.split('@')[-1], private_key)
+        raw = sign_message(raw, selector, _dkim_domain_for_from(from_addr), private_key)
 
     failed: list[str] = []
     for recipient in to_list:
@@ -192,7 +200,7 @@ async def relay_mx_raw(mail_from: str, recipients: list[str], raw: bytes) -> Non
     out = raw
     if dkim_data:
         selector, private_key = dkim_data
-        out = sign_message(out, selector, mail_from.split('@')[-1].lower(), private_key)
+        out = sign_message(out, selector, _dkim_domain_for_from(mail_from), private_key)
 
     sender_mailbox_id = None
     async with AsyncSessionLocal() as db:

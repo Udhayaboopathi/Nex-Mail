@@ -162,7 +162,14 @@ async def _scoped_domain(user: dict) -> Domain | None:
             return (
                 await db.execute(select(Domain).order_by(Domain.created_at.asc()).limit(1))
             ).scalar_one_or_none()
-        return (await db.execute(select(Domain).where(Domain.admin_user_id == uid))).scalar_one_or_none()
+        return (
+            await db.execute(
+                select(Domain)
+                .where(Domain.admin_user_id == uid)
+                .order_by(Domain.created_at.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
 
 
 def _alias_item(a: Alias) -> AliasItem:
