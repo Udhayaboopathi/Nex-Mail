@@ -57,7 +57,12 @@ class SearchResponse(BaseModel):
 
 
 class SendEmailRequest(BaseModel):
-    to: list[str]
+    # Frontend currently sends to_addresses/cc_addresses/bcc_addresses.
+    # Support both the simple "to" field and the structured fields.
+    to: list[str] | None = None
+    to_addresses: list[str] | None = None
+    cc_addresses: list[str] | None = None
+    bcc_addresses: list[str] | None = None
     subject: str
     body_text: str = ""
     body_html: str | None = None
@@ -120,8 +125,13 @@ async def send_email(
     if not sender:
         raise HTTPException(status_code=400, detail="Sender address not available for this user")
 
+    # Normalize recipients from either "to" or "to_addresses".
+    to_list = payload.to if payload.to is not None else payload.to_addresses or []
+    if not to_list:
+        raise HTTPException(status_code=422, detail="At least one recipient is required.")
+
     result = await smtp_send_email(
-        to=payload.to,
+        to=to_list,
         subject=payload.subject,
         body_text=payload.body_text,
         body_html=payload.body_html,
