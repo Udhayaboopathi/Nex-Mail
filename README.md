@@ -7,3 +7,5 @@ Run `cp .env.example .env`, fill values, then `make build && make migrate && mak
 ## Architecture
 
 The technical stack and engineering principles for this repository (Next.js, FastAPI, PostgreSQL, Redis/Celery, Traefik, Docker, RBAC, async-first backend) are in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
+
