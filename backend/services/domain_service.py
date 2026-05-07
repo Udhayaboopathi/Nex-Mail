@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import datetime, timezone
+from uuid import UUID
 
 import httpx
 from cryptography.hazmat.primitives import serialization
@@ -47,6 +48,14 @@ def dkim_txt_dns_name(domain: Domain) -> str:
     return f"{sel}._domainkey"
 
 
+def mail_hostname_for_domain(domain: Domain) -> str:
+    """FQDN for MX / mail A record (SMTP_HOSTNAME or mail.<apex>)."""
+    mh = (settings.smtp_hostname or "").strip().lower().rstrip(".")
+    if mh:
+        return mh
+    return f"mail.{domain.name.lower().rstrip('.')}"
+
+
 async def fetch_cloudflare_zone_id(api_token: str, domain_name: str) -> str | None:
     """Resolve Cloudflare zone id for an apex domain; returns None if the API call fails."""
     try:
@@ -70,6 +79,137 @@ async def fetch_cloudflare_zone_id(api_token: str, domain_name: str) -> str | No
     except Exception as exc:
         logger.warning("Cloudflare zone lookup failed for %s: %s", domain_name, exc)
         return None
+
+
+async def sync_cloudflare_mail_dns(zone_id: str, api_token: str, domain_id: str) -> dict[str, object]:
+    """
+    Create or update MX, A (mail host), SPF, DKIM, and DMARC in Cloudflare.
+    Requires a token with Zone:DNS:Edit. A record is skipped if SERVER_IP is unset.
+    """
+    token = api_token.strip()
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    api_base = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"
+    steps: list[str] = []
+    all_ok = True
+
+    async with AsyncSessionLocal() as db:
+        domain = (await db.execute(select(Domain).where(Domain.id == UUID(domain_id)))).scalar_one_or_none()
+        if domain is None:
+            return {"attempted": True, "ok": False, "message": "Domain not found", "steps": []}
+
+    apex = domain.name.lower().rstrip(".")
+    mail_host = mail_hostname_for_domain(domain)
+    server_ip = (settings.server_ip or "").strip()
+    selector = domain.dkim_selector or settings.dkim_selector
+    dkim_fqdn = f"{selector}._domainkey.{apex}"
+    dkim_txt = build_dkim_txt_record(domain)
+    spf = (domain.spf_record or f"v=spf1 mx a:{mail_host} ~all").strip()
+    dmarc = (domain.dmarc_record or f"v=DMARC1; p=quarantine; rua=mailto:dmarc@{apex}").strip()
+
+    async def _cf_ok(resp: httpx.Response) -> tuple[bool, str]:
+        try:
+            data = resp.json()
+        except Exception:
+            return False, resp.text or f"HTTP {resp.status_code}"
+        if data.get("success"):
+            return True, ""
+        errs = data.get("errors") or [{}]
+        return False, str(errs[0].get("message") or errs)
+
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        async def upsert_simple(rtype: str, name: str, body: dict) -> None:
+            nonlocal all_ok
+            merged = {"type": rtype, "name": name, "ttl": 300, **body}
+            if rtype == "A":
+                merged["proxied"] = False
+            try:
+                lr = await client.get(api_base, headers=headers, params={"type": rtype, "name": name})
+                lr.raise_for_status()
+                rows = lr.json().get("result") or []
+                if rows:
+                    rid = rows[0]["id"]
+                    pr = await client.patch(f"{api_base}/{rid}", headers=headers, json=merged)
+                else:
+                    pr = await client.post(api_base, headers=headers, json=merged)
+                ok, err = await _cf_ok(pr)
+                if not ok:
+                    all_ok = False
+                    steps.append(f"fail {rtype} {name}: {err or pr.text}")
+                else:
+                    steps.append(f"ok {rtype} {name}")
+            except Exception as exc:
+                all_ok = False
+                steps.append(f"fail {rtype} {name}: {exc}")
+
+        async def upsert_spf() -> None:
+            nonlocal all_ok
+            body = {"type": "TXT", "name": apex, "content": spf, "ttl": 300}
+            try:
+                lr = await client.get(api_base, headers=headers, params={"type": "TXT", "name": apex})
+                lr.raise_for_status()
+                rows = lr.json().get("result") or []
+                spf_rows = [r for r in rows if "v=spf1" in (r.get("content") or "")]
+                if spf_rows:
+                    rid = spf_rows[0]["id"]
+                    pr = await client.patch(f"{api_base}/{rid}", headers=headers, json=body)
+                else:
+                    pr = await client.post(api_base, headers=headers, json=body)
+                ok, err = await _cf_ok(pr)
+                if not ok:
+                    all_ok = False
+                    steps.append(f"fail TXT SPF {apex}: {err or pr.text}")
+                else:
+                    steps.append(f"ok TXT SPF {apex}")
+            except Exception as exc:
+                all_ok = False
+                steps.append(f"fail TXT SPF {apex}: {exc}")
+
+        if server_ip:
+            await upsert_simple("A", mail_host, {"content": server_ip})
+        else:
+            steps.append("skip A (set SERVER_IP in backend .env for automatic mail host A record)")
+
+        async def upsert_mx() -> None:
+            nonlocal all_ok
+            body = {"type": "MX", "name": apex, "content": mail_host, "priority": 10, "ttl": 300}
+            target = mail_host.rstrip(".").lower()
+            try:
+                lr = await client.get(api_base, headers=headers, params={"type": "MX", "name": apex})
+                lr.raise_for_status()
+                rows = lr.json().get("result") or []
+                ours = [
+                    r
+                    for r in rows
+                    if (r.get("content") or "").rstrip(".").lower() == target
+                ]
+                if ours:
+                    rid = ours[0]["id"]
+                    pr = await client.patch(f"{api_base}/{rid}", headers=headers, json=body)
+                else:
+                    pr = await client.post(api_base, headers=headers, json=body)
+                ok, err = await _cf_ok(pr)
+                if not ok:
+                    all_ok = False
+                    steps.append(f"fail MX {apex}: {err or pr.text}")
+                else:
+                    steps.append(f"ok MX {apex} -> {mail_host}")
+            except Exception as exc:
+                all_ok = False
+                steps.append(f"fail MX {apex}: {exc}")
+
+        await upsert_mx()
+        await upsert_spf()
+
+        if dkim_txt:
+            await upsert_simple("TXT", dkim_fqdn, {"content": dkim_txt})
+        else:
+            all_ok = False
+            steps.append("skip DKIM (no key in DB — recreate domain or restore keys)")
+
+        await upsert_simple("TXT", f"_dmarc.{apex}", {"content": dmarc})
+
+    msg = "Cloudflare DNS sync completed." if all_ok else "Cloudflare DNS sync finished with errors — see steps."
+    return {"attempted": True, "ok": all_ok, "message": msg, "steps": steps}
 
 
 async def create_domain(name: str, admin_user_id: str | None = None) -> dict:
@@ -99,7 +239,7 @@ async def create_domain(name: str, admin_user_id: str | None = None) -> dict:
             name=name.lower(),
             dkim_private_key_encrypted=encrypt_value(private_pem),
             dkim_selector=settings.dkim_selector,
-            spf_record=f"v=spf1 mx a:{name.lower()} ~all",
+            spf_record=f"v=spf1 mx a:mail.{name.lower()} ~all",
             dmarc_record=f"v=DMARC1; p=quarantine; rua=mailto:dmarc@{name.lower()}",
         )
         if admin_user_id:

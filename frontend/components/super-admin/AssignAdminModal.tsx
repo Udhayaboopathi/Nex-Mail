@@ -45,6 +45,14 @@ export function AssignAdminModal({ domainId, domainName, onClose, onAssigned }: 
         cloudflare_api_token: token,
       });
       toast(`Admin assigned for ${domainName}`, "success");
+      const cf = res.cloudflare_dns;
+      if (cf?.attempted === false) {
+        toast(cf.message || "Cloudflare zone not found — DNS records were not pushed.", "error");
+      } else if (cf?.attempted && cf.ok === false) {
+        toast(cf.message || "Some Cloudflare DNS updates failed — check super-admin logs or re-sync from Domains menu.", "error");
+      } else if (cf?.attempted && cf.ok) {
+        toast("Mail DNS records synced to Cloudflare.", "success");
+      }
       if (isConsumerGmail(email)) {
         if (res.welcome_email_queued) {
           toast(
@@ -81,9 +89,10 @@ export function AssignAdminModal({ domainId, domainName, onClose, onAssigned }: 
           <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-blue-700 dark:text-blue-300 text-sm">
             <UserCheck className="w-5 h-5 shrink-0" />
             <span>
-              Set admin for <strong>{domainName}</strong>. The Cloudflare token is stored encrypted for DNS automation.
-              Automated login email is sent only for <strong>@gmail.com</strong> / <strong>@googlemail.com</strong> addresses;
-              for other addresses, share credentials out of band.
+              Set admin for <strong>{domainName}</strong>. With a valid Cloudflare token (Zone:DNS:Edit), Nex Mail will
+              create or update MX, A (mail host), SPF, DKIM, and DMARC in that zone. Set <code className="text-xs">SERVER_IP</code> and{" "}
+              <code className="text-xs">SMTP_HOSTNAME</code> in the server <code className="text-xs">.env</code> so the A/MX targets are correct.
+              The token is stored encrypted. Welcome email is sent only for <strong>@gmail.com</strong> / <strong>@googlemail.com</strong>.
             </span>
           </div>
           <div>

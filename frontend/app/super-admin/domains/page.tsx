@@ -64,14 +64,45 @@ export default function DomainsPage() {
     }
   }
 
+  async function handlePushCloudflare(d: Domain) {
+    setMenu(null);
+    try {
+      const r = await superAdminApi.syncCloudflareDns(d.id);
+      if (r.ok) toast(r.message || "Cloudflare DNS updated.", "success");
+      else toast(r.message || "Cloudflare DNS finished with errors.", "error");
+      load();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  }
+
+  async function handleDelete(d: Domain) {
+    const ok = confirm(
+      `Delete domain ${d.name}? This permanently removes the domain and related data (mailboxes, aliases, etc.). This cannot be undone.`
+    );
+    if (!ok) return;
+    setMenu(null);
+    try {
+      await superAdminApi.deleteDomain(d.id);
+      toast(`Domain ${d.name} deleted.`, "success");
+      load();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  }
+
   const menuItems =
     menuDomain != null
       ? [
           { label: "Assign Admin", fn: () => setAssignTarget(menuDomain) },
           { label: "DNS Setup", fn: () => setDnsTarget(menuDomain) },
+          ...(menuDomain.cloudflare_auto_dns
+            ? [{ label: "Push DNS to Cloudflare", fn: () => void handlePushCloudflare(menuDomain) }]
+            : []),
           menuDomain.is_suspended
             ? { label: "Unsuspend", fn: () => void handleUnsuspend(menuDomain) }
             : { label: "Suspend", fn: () => void handleSuspend(menuDomain) },
+          { label: "Delete domain", fn: () => void handleDelete(menuDomain) },
         ]
       : [];
 

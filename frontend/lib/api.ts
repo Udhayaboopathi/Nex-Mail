@@ -114,7 +114,20 @@ export const superAdminApi = {
       welcome_email_sent: boolean;
       welcome_email_error: string | null;
       welcome_email_queued?: boolean;
+      cloudflare_dns?: {
+        attempted?: boolean;
+        ok?: boolean;
+        message?: string;
+        steps?: string[];
+      } | null;
     }>(`/api/super-admin/domains/${id}/assign-admin`, body),
+  syncCloudflareDns: (id: string) =>
+    post<{
+      attempted?: boolean;
+      ok?: boolean;
+      message?: string;
+      steps?: string[];
+    }>(`/api/super-admin/domains/${id}/cloudflare/dns-sync`),
   suspendDomain: (id: string, reason: string) =>
     post(`/api/super-admin/domains/${id}/suspend`, { reason }),
   unsuspendDomain: (id: string) =>

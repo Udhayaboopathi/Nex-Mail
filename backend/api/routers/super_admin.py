@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from backend.api.deps import require_super_admin
 from backend.config import settings
-from backend.core.encryption import encrypt_value
+from backend.core.encryption import decrypt_value, encrypt_value
 from backend.core.security import hash_password
 from backend.database import AsyncSessionLocal
 from backend.models import BackupJob, Domain, Mailbox, User
@@ -19,6 +19,7 @@ from backend.services.domain_service import (
     create_domain as provision_domain_with_dkim,
     dkim_txt_dns_name,
     fetch_cloudflare_zone_id,
+    sync_cloudflare_mail_dns,
     verify_dns,
 )
 from backend.smtp.outbound import SMTPDeliveryError, send_direct
@@ -128,6 +129,8 @@ class AssignAdminResponse(BaseModel):
     welcome_email_error: str | None = None
     # When True, welcome mail runs after HTTP returns (avoids UI hang if port 25 is slow/blocked).
     welcome_email_queued: bool = False
+    # Pushed MX/A/SPF/DKIM/DMARC to Cloudflare when zone id resolves (requires Zone:DNS:Edit).
+    cloudflare_dns: dict | None = None
 
 
 class TestMailRequest(BaseModel):
@@ -428,6 +431,7 @@ async def assign_admin(
     welcome_sent = False
     welcome_err: str | None = None
     welcome_queued = False
+    cf_token = payload.cloudflare_api_token.strip()
 
     async with AsyncSessionLocal() as db:
         domain = (await db.execute(select(Domain).where(Domain.id == domain_uuid))).scalar_one_or_none()
@@ -450,8 +454,8 @@ async def assign_admin(
                 user.role = "domain_admin"
 
         domain.admin_user_id = user.id
-        domain.cloudflare_token_encrypted = encrypt_value(payload.cloudflare_api_token.strip())
-        zone_id = await fetch_cloudflare_zone_id(payload.cloudflare_api_token.strip(), domain.name)
+        domain.cloudflare_token_encrypted = encrypt_value(cf_token)
+        zone_id = await fetch_cloudflare_zone_id(cf_token, domain.name)
         if zone_id:
             domain.cloudflare_zone_id = zone_id
             domain.cloudflare_auto_dns = True
@@ -459,6 +463,21 @@ async def assign_admin(
         await db.commit()
 
         domain_name = domain.name
+
+    cloudflare_dns: dict | None
+    if zone_id:
+        cloudflare_dns = await sync_cloudflare_mail_dns(str(zone_id), cf_token, domain_id)
+        if cloudflare_dns.get("ok"):
+            logger.info("Cloudflare DNS sync OK for domain %s: %s", domain_name, cloudflare_dns.get("steps"))
+        else:
+            logger.warning("Cloudflare DNS sync issues for domain %s: %s", domain_name, cloudflare_dns.get("steps"))
+    else:
+        cloudflare_dns = {
+            "attempted": False,
+            "ok": False,
+            "message": "Cloudflare zone not found — use a token with Zone:Read, ensure the domain is on Cloudflare, and the domain name matches the zone apex.",
+            "steps": [],
+        }
 
     # Send plaintext credentials only to Gmail / GoogleMail (explicit product choice).
     # Run in background so Cloudflare + DB commit return quickly; direct MX can block on port 25.
@@ -478,7 +497,31 @@ async def assign_admin(
         welcome_email_sent=welcome_sent,
         welcome_email_error=welcome_err,
         welcome_email_queued=welcome_queued,
+        cloudflare_dns=cloudflare_dns,
     )
+
+
+@router.post("/domains/{domain_id}/cloudflare/dns-sync")
+async def push_cloudflare_dns(domain_id: str) -> dict:
+    """Re-push MX / A / SPF / DKIM / DMARC using the token stored at assign-admin time."""
+    try:
+        domain_uuid = UUID(domain_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid domain id") from exc
+
+    async with AsyncSessionLocal() as db:
+        domain = (await db.execute(select(Domain).where(Domain.id == domain_uuid))).scalar_one_or_none()
+        if domain is None:
+            raise HTTPException(status_code=404, detail="Domain not found")
+        if not domain.cloudflare_zone_id or not domain.cloudflare_token_encrypted:
+            raise HTTPException(
+                status_code=400,
+                detail="Cloudflare is not configured for this domain. Assign a domain admin with a Cloudflare API token first.",
+            )
+        zid = str(domain.cloudflare_zone_id)
+        token = decrypt_value(domain.cloudflare_token_encrypted)
+
+    return await sync_cloudflare_mail_dns(zid, token, domain_id)
 
 
 @router.post("/domains/{domain_id}/suspend")

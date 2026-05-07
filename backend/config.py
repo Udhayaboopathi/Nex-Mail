@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     max_message_size_mb: int = 25
     maildir_base: str = "/var/mail"
     dkim_selector: str = "mail"
+    server_ip: str = ""  # .env SERVER_IP — used when pushing mail A record to Cloudflare
+    smtp_hostname: str = ""  # .env SMTP_HOSTNAME — MX/A host (default mail.<apex> if empty)
     cloudflare_api_token: str = ""
     backup_retention_days: int = 7
     backup_schedule_hour: int = 2
