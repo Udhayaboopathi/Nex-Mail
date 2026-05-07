@@ -11,7 +11,10 @@ export default function DomainAuditPage() {
 
   useEffect(() => {
     domainAdminApi.getAuditLogs()
-      .then((r) => setLogs(r.items))
+      .then((r) => {
+        const items = Array.isArray(r) ? r : (Array.isArray((r as { items?: AuditLog[] }).items) ? (r as { items: AuditLog[] }).items : []);
+        setLogs(items);
+      })
       .catch((e) => toast(e.message, "error"))
       .finally(() => setLoading(false));
   }, []);

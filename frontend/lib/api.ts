@@ -184,7 +184,8 @@ export const domainAdminApi = {
   getRetention: () => get("/api/domain-admin/retention"),
   updateRetention: (data: { retention_days: number }) =>
     patch("/api/domain-admin/retention", data),
-  getAuditLogs: (p = 1) => get<Paginated<AuditLog>>(`/api/domain-admin/audit-logs?page=${p}`),
+  getAuditLogs: (p = 1) =>
+    get<Paginated<AuditLog> | AuditLog[]>(`/api/domain-admin/audit-logs?page=${p}`),
   createBackup: () => post<{ job_id: string }>("/api/domain-admin/backup"),
   getBackupJobs: () => get<BackupJob[]>("/api/domain-admin/backup/jobs"),
   restoreBackup: (jobId: string) => post(`/api/domain-admin/backup/restore`, { job_id: jobId }),
