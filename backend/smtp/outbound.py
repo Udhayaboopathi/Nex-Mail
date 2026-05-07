@@ -71,6 +71,19 @@ def _sender_domain(from_addr: str) -> str:
     return from_addr.split("@")[-1].lower().strip()
 
 
+def _envelope_from_for_signing(from_addr: str, signing_domain: str) -> str:
+    """
+    Envelope MAIL FROM used for SMTP transaction.
+    When global signing is forced to another domain, align envelope sender domain
+    so SPF can pass for that domain at receiver side.
+    """
+    sender_domain = _sender_domain(from_addr)
+    if sender_domain == signing_domain:
+        return from_addr
+    local = from_addr.split("@", 1)[0].strip() or "mailer"
+    return f"{local}@{signing_domain}"
+
+
 async def _effective_dkim_domain(from_addr: str) -> str:
     forced = _dkim_domain_for_from(from_addr)
     if not _forced_dkim_signing_enabled():
@@ -128,6 +141,7 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
             sender_mailbox_id = mailbox.id
 
     signing_domain = await _effective_dkim_domain(from_addr)
+    envelope_from = _envelope_from_for_signing(from_addr, signing_domain)
     dkim_data = await _load_dkim_key(signing_domain)
     if _forced_dkim_signing_enabled() and signing_domain == _dkim_domain_for_from(from_addr) and dkim_data is None:
         forced_domain = signing_domain
@@ -156,14 +170,15 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
         for _, mx_host in mx_hosts:
             try:
                 logger.info(
-                    'send_direct trying MX mail_from=%s to=%s mx=%s:25',
+                    'send_direct trying MX mail_from=%s envelope_from=%s to=%s mx=%s:25',
                     from_addr,
+                    envelope_from,
                     recipient,
                     mx_host,
                 )
                 await aiosmtplib.send(
                     raw,
-                    sender=from_addr,
+                    sender=envelope_from,
                     recipients=[recipient],
                     hostname=mx_host,
                     port=25,
@@ -226,6 +241,7 @@ async def relay_mx_raw(mail_from: str, recipients: list[str], raw: bytes) -> Non
         return
     logger.info('relay_mx_raw start mail_from=%s recipients=%s', mail_from, recipients)
     signing_domain = await _effective_dkim_domain(mail_from)
+    envelope_from = _envelope_from_for_signing(mail_from, signing_domain)
     dkim_data = await _load_dkim_key(signing_domain)
     if _forced_dkim_signing_enabled() and signing_domain == _dkim_domain_for_from(mail_from) and dkim_data is None:
         forced_domain = signing_domain
@@ -261,14 +277,15 @@ async def relay_mx_raw(mail_from: str, recipients: list[str], raw: bytes) -> Non
         for _, mx_host in mx_hosts:
             try:
                 logger.info(
-                    'relay_mx_raw trying MX mail_from=%s to=%s mx=%s:25',
+                    'relay_mx_raw trying MX mail_from=%s envelope_from=%s to=%s mx=%s:25',
                     mail_from,
+                    envelope_from,
                     recipient,
                     mx_host,
                 )
                 await aiosmtplib.send(
                     out,
-                    sender=mail_from,
+                    sender=envelope_from,
                     recipients=[recipient],
                     hostname=mx_host,
                     port=25,
