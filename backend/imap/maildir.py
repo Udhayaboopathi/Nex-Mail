@@ -14,6 +14,11 @@ def _folder_path(maildir_path: str, folder: str) -> Path:
 
 
 def _maildir(maildir_path: str, folder: str) -> Maildir:
+    # Ensure mailbox root exists with required Maildir subfolders.
+    base = Path(maildir_path)
+    base.mkdir(parents=True, exist_ok=True)
+    for sub in ("cur", "new", "tmp"):
+        (base / sub).mkdir(parents=True, exist_ok=True)
     return Maildir(_folder_path(maildir_path, folder).as_posix(), create=True)
 
 
