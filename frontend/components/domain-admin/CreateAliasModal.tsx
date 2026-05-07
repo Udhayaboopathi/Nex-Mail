@@ -24,7 +24,13 @@ export default function CreateAliasModal({ open, onClose, onCreate }: CreateAlia
     if (!destination.trim()) { toast("Destination is required", "error"); return; }
     setBusy(true);
     try {
-      await domainAdminApi.createAlias({ source_address: source.trim(), destination_address: destination.trim(), is_catch_all: isCatchAll });
+      const dom = await domainAdminApi.getAdminDomain();
+      await domainAdminApi.createAlias({
+        domain_id: dom.id,
+        source_address: source.trim(),
+        destination_address: destination.trim(),
+        is_catch_all: isCatchAll,
+      });
       toast("Alias created!", "success");
       onCreate();
       setSource(""); setDestination(""); setIsCatchAll(false);

@@ -161,9 +161,14 @@ export const domainAdminApi = {
   deleteMailbox: (id: string) => del(`/api/domain-admin/mailboxes/${id}`),
   resetMailboxPassword: (id: string, newPassword: string) =>
     post(`/api/domain-admin/mailboxes/${id}/reset-password`, { new_password: newPassword }),
-  getAliases: () => get<Alias[]>("/api/domain-admin/aliases"),
-  createAlias: (data: { source_address: string; destination_address: string; is_catch_all?: boolean }) =>
-    post<Alias>("/api/domain-admin/aliases", data),
+  getAliases: () =>
+    get<{ items: Alias[] }>("/api/domain-admin/aliases").then((r) => (Array.isArray(r.items) ? r.items : [])),
+  createAlias: (data: {
+    domain_id: string;
+    source_address: string;
+    destination_address: string;
+    is_catch_all?: boolean;
+  }) => post<Alias>("/api/domain-admin/aliases", data),
   updateAlias: (id: string, data: Partial<Alias>) =>
     patch<Alias>(`/api/domain-admin/aliases/${id}`, data),
   deleteAlias: (id: string) => del(`/api/domain-admin/aliases/${id}`),
