@@ -467,20 +467,27 @@ async def delete_alias(alias_id: str, user: dict = Depends(require_any_auth)) ->
 
 @router.get("/dns/status", response_model=DnsStatusResponse)
 async def get_dns_status(user: dict = Depends(require_any_auth)) -> DnsStatusResponse:
-    async with AsyncSessionLocal() as db:
-        domain = (await db.execute(select(Domain).limit(1))).scalar_one_or_none()
+    domain = await _scoped_domain(user)
     if domain is None:
         return DnsStatusResponse(records=[], all_valid=False, ptr_note="No domain configured")
 
+    details = await verify_dns_details(str(domain.id))
+    rs = details.get("records", {})
     dn = domain.name
-    records = [
-        DnsStatusRecord(type="MX", name=dn, expected=f"10 mail.{dn}", valid=False),
-        DnsStatusRecord(type="A", name=f"mail.{dn}", expected="YOUR_IP", valid=False),
-        DnsStatusRecord(type="TXT", name=dn, expected=f"v=spf1 mx a:{dn} ~all", valid=domain.dns_verified),
-        DnsStatusRecord(type="TXT", name=f"mail._domainkey.{dn}", expected="v=DKIM1; k=rsa; p=...", valid=bool(domain.dkim_private_key_encrypted)),
-        DnsStatusRecord(type="TXT", name=f"_dmarc.{dn}", expected=f"v=DMARC1; p=quarantine; rua=mailto:dmarc@{dn}", valid=domain.dns_verified),
-    ]
-    return DnsStatusResponse(records=records, all_valid=domain.dns_verified, ptr_note=f"Set PTR record for YOUR_IP → mail.{dn} in Contabo panel")
+    out: list[DnsStatusRecord] = []
+    if "mx" in rs:
+        out.append(DnsStatusRecord(type="MX", name=dn, expected=str(rs["mx"].get("expected") or ""), current=rs["mx"].get("value"), valid=bool(rs["mx"].get("ok"))))
+    if "a" in rs:
+        out.append(DnsStatusRecord(type="A", name=f"mail.{dn}", expected=str(rs["a"].get("expected") or ""), current=rs["a"].get("value"), valid=bool(rs["a"].get("ok"))))
+    if "spf" in rs:
+        out.append(DnsStatusRecord(type="TXT", name=dn, expected=str(rs["spf"].get("expected") or ""), current=rs["spf"].get("value"), valid=bool(rs["spf"].get("ok"))))
+    if "dkim" in rs:
+        out.append(DnsStatusRecord(type="TXT", name=f"{details.get('dkim_selector') or domain.dkim_selector}._domainkey.{dn}", expected=str(rs["dkim"].get("expected") or ""), current=rs["dkim"].get("value"), valid=bool(rs["dkim"].get("ok"))))
+    if "dmarc" in rs:
+        out.append(DnsStatusRecord(type="TXT", name=f"_dmarc.{dn}", expected=str(rs["dmarc"].get("expected") or ""), current=rs["dmarc"].get("value"), valid=bool(rs["dmarc"].get("ok"))))
+    if "bimi" in rs:
+        out.append(DnsStatusRecord(type="TXT", name=f"default._bimi.{dn}", expected=str(rs["bimi"].get("expected") or ""), current=rs["bimi"].get("value"), valid=bool(rs["bimi"].get("ok"))))
+    return DnsStatusResponse(records=out, all_valid=bool(details.get("all_ok")), ptr_note=f"Set PTR record for sending IP -> mail.{dn} in your VPS provider panel")
 
 
 @router.get("/dns/guide")
@@ -503,20 +510,27 @@ async def get_dns_guide(user: dict = Depends(require_any_auth)) -> dict:
 
 
 @router.post("/dns/verify")
-async def verify_dns(user: dict = Depends(require_any_auth)) -> dict[str, bool]:
-    async with AsyncSessionLocal() as db:
-        domain = (await db.execute(select(Domain).limit(1))).scalar_one_or_none()
-        if domain is None:
-            raise HTTPException(status_code=404, detail="No domain found")
-        domain.dns_verified = True
-        domain.dns_verified_at = datetime.now(tz=timezone.utc)
-        await db.commit()
-    return {"ok": True, "dns_verified": True}
+async def verify_dns(user: dict = Depends(require_any_auth)) -> dict:
+    domain = await _scoped_domain(user)
+    if domain is None:
+        raise HTTPException(status_code=404, detail="No domain found")
+    return await verify_dns_details(str(domain.id))
 
 
 @router.post("/dns/auto")
 async def configure_dns_auto(user: dict = Depends(require_any_auth)) -> dict[str, str]:
-    return {"status": "queued", "message": "Auto DNS configuration queued"}
+    domain = await _scoped_domain(user)
+    if domain is None:
+        raise HTTPException(status_code=404, detail="No domain found")
+    async with AsyncSessionLocal() as db:
+        row = (await db.execute(select(Domain).where(Domain.id == domain.id))).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="No domain found")
+        if not row.cloudflare_zone_id or not row.cloudflare_token_encrypted:
+            raise HTTPException(status_code=400, detail="Cloudflare token/zone is not configured for this domain")
+        token = decrypt_value(row.cloudflare_token_encrypted)
+    result = await sync_cloudflare_mail_dns(str(row.cloudflare_zone_id), token, str(row.id))
+    return {"status": "completed" if result.get("ok") else "completed_with_errors", "message": str(result.get("message") or "")}
 
 
 # ── Backup ────────────────────────────────────────────────────────────────────

@@ -68,6 +68,10 @@ def bimi_txt_record_for_domain(domain: Domain) -> str | None:
     return f"v=BIMI1; l={logo};"
 
 
+def _norm_txt(value: str | None) -> str:
+    return " ".join((value or "").strip().strip('"').split()).lower()
+
+
 async def fetch_cloudflare_zone_id(api_token: str, domain_name: str) -> str | None:
     """Resolve Cloudflare zone id for an apex domain; returns None if the API call fails."""
     try:
@@ -279,6 +283,62 @@ async def sync_cloudflare_mail_dns(zone_id: str, api_token: str, domain_id: str)
 
         if bimi_txt:
             await upsert_simple("TXT", f"default._bimi.{apex}", {"content": bimi_txt})
+
+        # Final API-side confirmation against Cloudflare itself (not resolver cache).
+        try:
+            if server_ip:
+                a_rows = await list_records("A", mail_host)
+                has_a = any((r.get("content") or "").strip() == server_ip for r in a_rows)
+                if not has_a:
+                    all_ok = False
+                    steps.append(f"fail confirm A {mail_host} -> {server_ip}")
+                else:
+                    steps.append(f"ok confirm A {mail_host} -> {server_ip}")
+
+            mx_rows = await list_records("MX", apex)
+            has_mx = any((r.get("content") or "").rstrip(".").lower() == mail_host.rstrip(".").lower() for r in mx_rows)
+            if not has_mx:
+                all_ok = False
+                steps.append(f"fail confirm MX {apex} -> {mail_host}")
+            else:
+                steps.append(f"ok confirm MX {apex} -> {mail_host}")
+
+            apex_txt_rows = await list_records("TXT", apex)
+            has_spf = any(_norm_txt(r.get("content")) == _norm_txt(spf) for r in apex_txt_rows)
+            if not has_spf:
+                all_ok = False
+                steps.append(f"fail confirm SPF {apex}")
+            else:
+                steps.append(f"ok confirm SPF {apex}")
+
+            if dkim_txt:
+                dkim_rows = await list_records("TXT", dkim_fqdn)
+                has_dkim = any(_norm_txt(r.get("content")) == _norm_txt(dkim_txt) for r in dkim_rows)
+                if not has_dkim:
+                    all_ok = False
+                    steps.append(f"fail confirm DKIM {dkim_fqdn}")
+                else:
+                    steps.append(f"ok confirm DKIM {dkim_fqdn}")
+
+            dmarc_rows = await list_records("TXT", f"_dmarc.{apex}")
+            has_dmarc = any(_norm_txt(r.get("content")) == _norm_txt(dmarc) for r in dmarc_rows)
+            if not has_dmarc:
+                all_ok = False
+                steps.append(f"fail confirm DMARC _dmarc.{apex}")
+            else:
+                steps.append(f"ok confirm DMARC _dmarc.{apex}")
+
+            if bimi_txt:
+                bimi_rows = await list_records("TXT", f"default._bimi.{apex}")
+                has_bimi = any(_norm_txt(r.get("content")) == _norm_txt(bimi_txt) for r in bimi_rows)
+                if not has_bimi:
+                    all_ok = False
+                    steps.append(f"fail confirm BIMI default._bimi.{apex}")
+                else:
+                    steps.append(f"ok confirm BIMI default._bimi.{apex}")
+        except Exception as exc:
+            all_ok = False
+            steps.append(f"fail final Cloudflare confirmation: {exc}")
 
     msg = "Cloudflare DNS sync completed." if all_ok else "Cloudflare DNS sync finished with errors — see steps."
     return {"attempted": True, "ok": all_ok, "message": msg, "steps": steps}
@@ -513,21 +573,40 @@ async def verify_dns(domain_id: str) -> dict:
             raise ValueError("Domain not found.")
         name = domain.name
         selector = domain.dkim_selector or settings.dkim_selector
+        mail_host = mail_hostname_for_domain(domain)
+        server_ip = (settings.server_ip or "").strip()
+        expected_spf = (domain.spf_record or f"v=spf1 mx a:{mail_host} ~all").strip()
+        expected_dkim = build_dkim_txt_record(domain)
+        expected_dmarc = (domain.dmarc_record or f"v=DMARC1; p=quarantine; rua=mailto:dmarc@{name}").strip()
+        expected_bimi = bimi_txt_record_for_domain(domain)
 
     results: dict[str, dict] = {}
 
     # MX
     try:
         mx = res.resolve(name, "MX")
-        results["mx"] = {"ok": True, "value": str(sorted(mx, key=lambda r: r.preference)[0].exchange)}
+        exchanges = [str(r.exchange).rstrip(".").lower() for r in sorted(mx, key=lambda r: r.preference)]
+        ok = mail_host.rstrip(".").lower() in exchanges
+        results["mx"] = {"ok": ok, "value": ", ".join(exchanges), "expected": mail_host}
     except Exception as exc:
         results["mx"] = {"ok": False, "error": str(exc)}
+
+    # A (mail host)
+    if server_ip:
+        try:
+            ans = res.resolve(mail_host, "A")
+            ips = [str(r) for r in ans]
+            ok = server_ip in ips
+            results["a"] = {"ok": ok, "value": ", ".join(ips), "expected": server_ip}
+        except Exception as exc:
+            results["a"] = {"ok": False, "error": str(exc), "expected": server_ip}
 
     # SPF
     try:
         txt_vals = _resolve_txt_strings(res, name)
-        spf = next((t for t in txt_vals if "v=spf1" in t), None)
-        results["spf"] = {"ok": bool(spf), "value": spf}
+        spf = next((t for t in txt_vals if "v=spf1" in t.lower()), None)
+        ok = bool(spf) and _norm_txt(spf) == _norm_txt(expected_spf)
+        results["spf"] = {"ok": ok, "value": spf, "expected": expected_spf}
     except Exception as exc:
         results["spf"] = {"ok": False, "error": str(exc)}
 
@@ -535,20 +614,34 @@ async def verify_dns(domain_id: str) -> dict:
     try:
         dkim_host = f"{selector}._domainkey.{name}"
         txt_vals = _resolve_txt_strings(res, dkim_host)
-        dkim_val = next((t for t in txt_vals if "v=DKIM1" in t), (txt_vals[0] if txt_vals else ""))
-        results["dkim"] = {"ok": bool(dkim_val and "v=DKIM1" in dkim_val), "value": dkim_val}
+        dkim_val = next((t for t in txt_vals if "v=dkim1" in t.lower()), (txt_vals[0] if txt_vals else ""))
+        ok = bool(dkim_val and "v=dkim1" in dkim_val.lower())
+        if expected_dkim:
+            ok = ok and _norm_txt(dkim_val) == _norm_txt(expected_dkim)
+        results["dkim"] = {"ok": ok, "value": dkim_val, "expected": expected_dkim}
     except Exception as exc:
         results["dkim"] = {"ok": False, "error": str(exc)}
 
     # DMARC
     try:
         txt_vals = _resolve_txt_strings(res, f"_dmarc.{name}")
-        dmarc = next((t for t in txt_vals if "v=DMARC1" in t), None)
-        results["dmarc"] = {"ok": bool(dmarc), "value": dmarc}
+        dmarc = next((t for t in txt_vals if "v=dmarc1" in t.lower()), None)
+        ok = bool(dmarc) and _norm_txt(dmarc) == _norm_txt(expected_dmarc)
+        results["dmarc"] = {"ok": ok, "value": dmarc, "expected": expected_dmarc}
     except Exception as exc:
         results["dmarc"] = {"ok": False, "error": str(exc)}
 
-    all_ok = all(v.get("ok") for v in results.values())
+    # BIMI (optional)
+    if expected_bimi:
+        try:
+            txt_vals = _resolve_txt_strings(res, f"default._bimi.{name}")
+            bimi = next((t for t in txt_vals if "v=bimi1" in t.lower()), None)
+            ok = bool(bimi) and _norm_txt(bimi) == _norm_txt(expected_bimi)
+            results["bimi"] = {"ok": ok, "value": bimi, "expected": expected_bimi}
+        except Exception as exc:
+            results["bimi"] = {"ok": False, "error": str(exc), "expected": expected_bimi}
+
+    all_ok = all(bool(v.get("ok")) for v in results.values())
 
     # Persist verification status
     async with AsyncSessionLocal() as db:
