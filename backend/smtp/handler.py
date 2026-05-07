@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import email
 import logging
+import uuid
 from email.message import Message
 from email.utils import getaddresses
 from mailbox import Maildir
@@ -131,6 +132,7 @@ def _deliver_data_sync(envelope_rcpt_tos: list[str], envelope_content: bytes, pa
             )
             db.add(
                 Email(
+                    id=uuid.uuid4(),
                     mailbox_id=mailbox.id,
                     folder=target_folder.lower(),
                     from_address=str(parsed.get("From") or ""),
@@ -149,7 +151,12 @@ def _deliver_data_sync(envelope_rcpt_tos: list[str], envelope_content: bytes, pa
                 )
             )
             mailbox.used_mb = float(mailbox.used_mb or 0) + (len(envelope_content) / (1024 * 1024))
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            # Maildir delivery already succeeded; don't bounce external senders for a DB side failure.
+            db.rollback()
+            logger.exception("DB persistence failed after Maildir delivery")
     return None
 
 

@@ -87,6 +87,11 @@ class SendEmailRequest(BaseModel):
     body_html: str | None = None
 
 
+class UpdateFlagsRequest(BaseModel):
+    is_read: bool | None = None
+    is_flagged: bool | None = None
+
+
 SYSTEM_FOLDERS = ["inbox", "sent", "drafts", "starred", "spam", "trash", "archive"]
 
 
@@ -477,6 +482,74 @@ async def get_message(
         read_receipt_token=None,
         is_pgp_encrypted=False,
     )
+
+
+@router.patch("/{folder}/{uid}/flags")
+async def update_message_flags(
+    folder: str,
+    uid: str,
+    payload: UpdateFlagsRequest,
+    user: dict = Depends(require_any_auth),
+) -> dict:
+    if folder not in SYSTEM_FOLDERS:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    mailbox = await _mailbox_for_user(user)
+    if mailbox is None:
+        raise HTTPException(status_code=404, detail="Mailbox not found")
+
+    db_uid = None
+    try:
+        db_uid = UUID(uid)
+    except ValueError:
+        db_uid = None
+
+    if db_uid is not None:
+        async with AsyncSessionLocal() as db:
+            row = (
+                await db.execute(
+                    select(Email).where(
+                        Email.id == db_uid,
+                        Email.mailbox_id == mailbox.id,
+                        Email.folder == folder,
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is not None:
+                if payload.is_read is not None:
+                    row.is_read = payload.is_read
+                if payload.is_flagged is not None:
+                    row.is_flagged = payload.is_flagged
+                    flags = set(row.flags or [])
+                    if payload.is_flagged:
+                        flags.add("F")
+                    else:
+                        flags.discard("F")
+                    row.flags = sorted(flags)
+                await db.commit()
+                return {"ok": True}
+
+    mailbox_path = _resolve_maildir_path(mailbox)
+    md_folder = _folder_to_maildir_name(folder)
+    existing = next((item for item in maildir.list_messages(mailbox_path, md_folder) if item.get("uid") == uid), None)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    flags = set(existing.get("flags", []))
+    if payload.is_read is not None:
+        if payload.is_read:
+            flags.add("S")
+        else:
+            flags.discard("S")
+    if payload.is_flagged is not None:
+        if payload.is_flagged:
+            flags.add("F")
+        else:
+            flags.discard("F")
+    ok = maildir.set_flags(mailbox_path, md_folder, uid, "".join(sorted(flags)))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return {"ok": True}
 
 
 @router.post("/send")

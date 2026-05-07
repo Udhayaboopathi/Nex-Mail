@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from email.message import EmailMessage
 from email.utils import make_msgid
 
@@ -155,6 +156,7 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
         async with AsyncSessionLocal() as db:
             db.add(
                 Email(
+                    id=uuid.uuid4(),
                     mailbox_id=sender_mailbox_id,
                     folder="sent",
                     from_address=from_addr,
