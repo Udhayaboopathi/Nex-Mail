@@ -111,12 +111,19 @@ def _message_has_attachments(msg: Message) -> bool:
 
 async def _mailbox_for_user(user: dict) -> Mailbox | None:
     email = (user.get("email") or "").strip().lower()
-    if not email:
-        return None
+    user_id = (user.get("id") or "").strip()
     async with AsyncSessionLocal() as db:
-        return (await db.execute(
-            select(Mailbox).where(Mailbox.full_address == email, Mailbox.is_active == True)
-        )).scalar_one_or_none()
+        if email:
+            mailbox = (await db.execute(
+                select(Mailbox).where(Mailbox.full_address == email, Mailbox.is_active == True)
+            )).scalar_one_or_none()
+            if mailbox is not None:
+                return mailbox
+        if user_id:
+            return (await db.execute(
+                select(Mailbox).where(Mailbox.user_id == user_id, Mailbox.is_active == True)
+            )).scalar_one_or_none()
+        return None
 
 
 def _maildir_candidates(mailbox: Mailbox) -> list[str]:
@@ -157,10 +164,13 @@ async def list_folders(user: dict = Depends(require_any_auth)) -> FolderListResp
             unread = sum(1 for item in entries if "S" not in item.get("flags", []))
             folders[i] = FolderItem(name=fname, unread=unread, total=len(entries))
 
-    async with AsyncSessionLocal() as db:
-        labels = (await db.execute(select(Label).order_by(Label.name.asc()))).scalars().all()
-        for lbl in labels:
-            folders.append(FolderItem(name=lbl.name or "", unread=0, total=0, color=lbl.color))
+    if mailbox:
+        async with AsyncSessionLocal() as db:
+            labels = (await db.execute(
+                select(Label).where(Label.mailbox_id == mailbox.id).order_by(Label.name.asc())
+            )).scalars().all()
+            for lbl in labels:
+                folders.append(FolderItem(name=lbl.name or "", unread=0, total=0, color=lbl.color))
 
     return FolderListResponse(folders=folders)
 
