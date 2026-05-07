@@ -1,3 +1,5 @@
+"use client";
+
 import { Mail } from "lucide-react";
 import { useMemo, useState } from "react";
 import { cn, colorFromString } from "../../lib/utils";
