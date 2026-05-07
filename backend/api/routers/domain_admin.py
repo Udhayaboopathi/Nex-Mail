@@ -1,13 +1,15 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 
 from backend.api.deps import require_any_auth, require_domain_admin
 from backend.database import AsyncSessionLocal
 from backend.models import Alias, AuditLog, Domain, Mailbox, User
+from backend.services.branding_service import save_domain_logo, save_domain_vmc
+from backend.services.domain_service import verify_dns as verify_dns_details
 
 router = APIRouter(tags=["domain_admin"])
 
@@ -105,6 +107,7 @@ class UpdateAliasRequest(BaseModel):
 
 class WhitelabelData(BaseModel):
     logo_url: str | None = None
+    bimi_vmc_url: str | None = None
     primary_color: str = "#6366f1"
     company_name: str | None = None
 
@@ -134,6 +137,16 @@ class AuditLogItem(BaseModel):
     target: str | None = None
     ip_address: str | None = None
     created_at: str
+
+
+class BrandingReadiness(BaseModel):
+    domain: str
+    dmarc_ok: bool
+    dkim_ok: bool
+    spf_ok: bool
+    bimi_ok: bool
+    vmc_set: bool
+    all_ready: bool
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -553,7 +566,12 @@ async def get_whitelabel(user: dict = Depends(require_any_auth)) -> WhitelabelDa
         domain = (await db.execute(select(Domain).limit(1))).scalar_one_or_none()
     if domain is None:
         return WhitelabelData()
-    return WhitelabelData(logo_url=domain.whitelabel_logo_url, primary_color=domain.whitelabel_primary_color or "#6366f1", company_name=domain.whitelabel_company_name)
+    return WhitelabelData(
+        logo_url=domain.whitelabel_logo_url,
+        bimi_vmc_url=domain.bimi_vmc_url,
+        primary_color=domain.whitelabel_primary_color or "#6366f1",
+        company_name=domain.whitelabel_company_name,
+    )
 
 
 @router.patch("/whitelabel", response_model=WhitelabelData)
@@ -564,13 +582,87 @@ async def update_whitelabel(payload: WhitelabelData, user: dict = Depends(requir
             raise HTTPException(status_code=404, detail="No domain found")
         if payload.logo_url is not None:
             domain.whitelabel_logo_url = payload.logo_url
+        if payload.bimi_vmc_url is not None:
+            domain.bimi_vmc_url = payload.bimi_vmc_url
         if payload.primary_color:
             domain.whitelabel_primary_color = payload.primary_color
         if payload.company_name is not None:
             domain.whitelabel_company_name = payload.company_name
         await db.commit()
         await db.refresh(domain)
-    return WhitelabelData(logo_url=domain.whitelabel_logo_url, primary_color=domain.whitelabel_primary_color or "#6366f1", company_name=domain.whitelabel_company_name)
+    return WhitelabelData(
+        logo_url=domain.whitelabel_logo_url,
+        bimi_vmc_url=domain.bimi_vmc_url,
+        primary_color=domain.whitelabel_primary_color or "#6366f1",
+        company_name=domain.whitelabel_company_name,
+    )
+
+
+@router.post("/whitelabel/logo-upload")
+async def upload_logo(file: UploadFile = File(...), user: dict = Depends(require_domain_admin)) -> dict:
+    d = await _scoped_domain(user)
+    if d is None:
+        raise HTTPException(status_code=404, detail="No domain found for this account.")
+    try:
+        url = await save_domain_logo(d.name, file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with AsyncSessionLocal() as db:
+        domain = (await db.execute(select(Domain).where(Domain.id == d.id))).scalar_one_or_none()
+        if domain is None:
+            raise HTTPException(status_code=404, detail="Domain not found")
+        domain.whitelabel_logo_url = url
+        await db.commit()
+    return {"logo_url": url}
+
+
+@router.post("/whitelabel/vmc-upload")
+async def upload_vmc(file: UploadFile = File(...), user: dict = Depends(require_domain_admin)) -> dict:
+    d = await _scoped_domain(user)
+    if d is None:
+        raise HTTPException(status_code=404, detail="No domain found for this account.")
+    try:
+        url = await save_domain_vmc(d.name, file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with AsyncSessionLocal() as db:
+        domain = (await db.execute(select(Domain).where(Domain.id == d.id))).scalar_one_or_none()
+        if domain is None:
+            raise HTTPException(status_code=404, detail="Domain not found")
+        domain.bimi_vmc_url = url
+        await db.commit()
+    return {"bimi_vmc_url": url}
+
+
+@router.get("/whitelabel/readiness", response_model=BrandingReadiness)
+async def branding_readiness(user: dict = Depends(require_domain_admin)) -> BrandingReadiness:
+    d = await _scoped_domain(user)
+    if d is None:
+        raise HTTPException(status_code=404, detail="No domain found for this account.")
+    details = await verify_dns_details(str(d.id))
+    records = details.get("records", {})
+    dmarc_ok = bool(records.get("dmarc", {}).get("ok"))
+    dkim_ok = bool(records.get("dkim", {}).get("ok"))
+    spf_ok = bool(records.get("spf", {}).get("ok"))
+    bimi_ok = False
+    try:
+        import dns.resolver
+        res = dns.resolver.Resolver(configure=False)
+        res.nameservers = ["1.1.1.1", "8.8.8.8"]
+        ans = res.resolve(f"default._bimi.{d.name}", "TXT")
+        bimi_ok = any("v=bimi1" in str(r).lower() for r in ans)
+    except Exception:
+        bimi_ok = False
+    vmc_set = bool((d.bimi_vmc_url or "").strip())
+    return BrandingReadiness(
+        domain=d.name,
+        dmarc_ok=dmarc_ok,
+        dkim_ok=dkim_ok,
+        spf_ok=spf_ok,
+        bimi_ok=bimi_ok,
+        vmc_set=vmc_set,
+        all_ready=dmarc_ok and dkim_ok and spf_ok and bimi_ok,
+    )
 
 
 # ── Retention ─────────────────────────────────────────────────────────────────

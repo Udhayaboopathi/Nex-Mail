@@ -37,6 +37,7 @@ class Domain(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     dmarc_record: Mapped[str | None] = mapped_column(Text)
     admin_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     whitelabel_logo_url: Mapped[str | None] = mapped_column(Text)
+    bimi_vmc_url: Mapped[str | None] = mapped_column(Text)
     whitelabel_primary_color: Mapped[str] = mapped_column(String(7), nullable=False, server_default="#6366f1")
     whitelabel_company_name: Mapped[str | None] = mapped_column(String(100))
     retention_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")

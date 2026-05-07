@@ -36,6 +36,7 @@ export interface Domain {
   whitelabel_company_name?: string;
   whitelabel_primary_color: string;
   whitelabel_logo_url?: string;
+  bimi_vmc_url?: string;
   retention_days: number;
   ediscovery_enabled: boolean;
   admin_user_id?: string;

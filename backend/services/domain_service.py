@@ -58,6 +58,16 @@ def mail_hostname_for_domain(domain: Domain) -> str:
     return f"mail.{apex}"
 
 
+def bimi_txt_record_for_domain(domain: Domain) -> str | None:
+    logo = (domain.whitelabel_logo_url or "").strip()
+    if not logo:
+        return None
+    vmc = (domain.bimi_vmc_url or "").strip()
+    if vmc:
+        return f"v=BIMI1; l={logo}; a={vmc};"
+    return f"v=BIMI1; l={logo};"
+
+
 async def fetch_cloudflare_zone_id(api_token: str, domain_name: str) -> str | None:
     """Resolve Cloudflare zone id for an apex domain; returns None if the API call fails."""
     try:
@@ -105,6 +115,7 @@ async def sync_cloudflare_mail_dns(zone_id: str, api_token: str, domain_id: str)
     selector = domain.dkim_selector or settings.dkim_selector
     dkim_fqdn = f"{selector}._domainkey.{apex}"
     dkim_txt = build_dkim_txt_record(domain)
+    bimi_txt = bimi_txt_record_for_domain(domain)
     spf = (domain.spf_record or f"v=spf1 mx a:{mail_host} ~all").strip()
     dmarc = (domain.dmarc_record or f"v=DMARC1; p=quarantine; rua=mailto:dmarc@{apex}").strip()
 
@@ -266,6 +277,9 @@ async def sync_cloudflare_mail_dns(zone_id: str, api_token: str, domain_id: str)
             all_ok = False
             steps.append(f"fail cleanup DMARC {apex}: {exc}")
 
+        if bimi_txt:
+            await upsert_simple("TXT", f"default._bimi.{apex}", {"content": bimi_txt})
+
     msg = "Cloudflare DNS sync completed." if all_ok else "Cloudflare DNS sync finished with errors — see steps."
     return {"attempted": True, "ok": all_ok, "message": msg, "steps": steps}
 
@@ -362,6 +376,16 @@ async def remove_cloudflare_mail_dns(zone_id: str, api_token: str, domain: Domai
         except Exception as exc:
             all_ok = False
             steps.append(f"fail list TXT _dmarc.{apex}: {exc}")
+
+        try:
+            bimi_rows = await list_records("TXT", f"default._bimi.{apex}")
+            for row in bimi_rows:
+                content = (row.get("content") or "").lower()
+                if "v=bimi1" in content:
+                    await delete_record(row.get("id", ""), f"TXT BIMI default._bimi.{apex}")
+        except Exception as exc:
+            all_ok = False
+            steps.append(f"fail list TXT default._bimi.{apex}: {exc}")
 
     msg = "Cloudflare mail DNS cleanup completed." if all_ok else "Cloudflare mail DNS cleanup finished with errors."
     return {"attempted": True, "ok": all_ok, "message": msg, "steps": steps}

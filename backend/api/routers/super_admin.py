@@ -3,7 +3,7 @@ from uuid import UUID
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 
@@ -14,6 +14,7 @@ from backend.core.security import hash_password
 from backend.database import AsyncSessionLocal
 from backend.models import BackupJob, Domain, Mailbox, User
 from backend.services.backup_service import create_full_backup
+from backend.services.branding_service import save_domain_logo, save_domain_vmc
 from backend.services.domain_service import (
     build_dkim_txt_record,
     create_domain as provision_domain_with_dkim,
@@ -95,6 +96,7 @@ class DomainItem(BaseModel):
     whitelabel_company_name: str | None = None
     whitelabel_primary_color: str
     whitelabel_logo_url: str | None = None
+    bimi_vmc_url: str | None = None
     retention_days: int
     ediscovery_enabled: bool
     admin_user_id: str | None = None
@@ -118,6 +120,7 @@ class UpdateDomainRequest(BaseModel):
     whitelabel_company_name: str | None = None
     whitelabel_primary_color: str | None = None
     whitelabel_logo_url: str | None = None
+    bimi_vmc_url: str | None = None
     ediscovery_enabled: bool | None = None
 
 
@@ -258,6 +261,7 @@ def _domain_to_item(d: Domain) -> DomainItem:
         whitelabel_company_name=d.whitelabel_company_name,
         whitelabel_primary_color=d.whitelabel_primary_color or "#6366f1",
         whitelabel_logo_url=d.whitelabel_logo_url,
+        bimi_vmc_url=d.bimi_vmc_url,
         retention_days=int(d.retention_days or 0),
         ediscovery_enabled=bool(d.ediscovery_enabled),
         admin_user_id=str(d.admin_user_id) if d.admin_user_id else None,
@@ -553,6 +557,44 @@ async def push_cloudflare_dns(domain_id: str) -> dict:
         token = decrypt_value(domain.cloudflare_token_encrypted)
 
     return await sync_cloudflare_mail_dns(zid, token, domain_id)
+
+
+@router.post("/domains/{domain_id}/branding/logo-upload")
+async def upload_domain_logo(domain_id: str, file: UploadFile = File(...)) -> dict:
+    try:
+        domain_uuid = UUID(domain_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid domain id") from exc
+    async with AsyncSessionLocal() as db:
+        domain = (await db.execute(select(Domain).where(Domain.id == domain_uuid))).scalar_one_or_none()
+        if domain is None:
+            raise HTTPException(status_code=404, detail="Domain not found")
+        try:
+            logo_url = await save_domain_logo(domain.name, file)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        domain.whitelabel_logo_url = logo_url
+        await db.commit()
+    return {"logo_url": logo_url}
+
+
+@router.post("/domains/{domain_id}/branding/vmc-upload")
+async def upload_domain_vmc(domain_id: str, file: UploadFile = File(...)) -> dict:
+    try:
+        domain_uuid = UUID(domain_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid domain id") from exc
+    async with AsyncSessionLocal() as db:
+        domain = (await db.execute(select(Domain).where(Domain.id == domain_uuid))).scalar_one_or_none()
+        if domain is None:
+            raise HTTPException(status_code=404, detail="Domain not found")
+        try:
+            vmc_url = await save_domain_vmc(domain.name, file)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        domain.bimi_vmc_url = vmc_url
+        await db.commit()
+    return {"bimi_vmc_url": vmc_url}
 
 
 @router.post("/domains/{domain_id}/suspend")

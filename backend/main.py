@@ -2,8 +2,10 @@ import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from backend.database import AsyncSessionLocal
@@ -89,6 +91,12 @@ app.include_router(shared_mailboxes.router, prefix="/api/shared-mailboxes")
 app.include_router(delegation.router, prefix="/api/delegation")
 app.include_router(spam_reports.router, prefix="/api/mail/report")
 app.include_router(ediscovery.router, prefix="/api/admin/ediscovery")
+
+branding_root = Path(__file__).resolve().parent.parent / "data" / "domain-branding"
+from backend.config import settings
+branding_dir = Path(settings.domain_branding_storage_dir or branding_root.as_posix())
+branding_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/static/domain-branding", StaticFiles(directory=branding_dir.as_posix()), name="domain-branding")
 
 @app.get("/health")
 async def health() -> dict[str, str]:

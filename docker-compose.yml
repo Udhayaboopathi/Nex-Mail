@@ -47,6 +47,7 @@ services:
     ports: ["25:25","587:587","993:993"]
     volumes:
       - ./infra/mail-certs:/etc/ssl/mail:ro
+      - ./data/domain-branding:/var/nexmail/domain-branding
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik-public"

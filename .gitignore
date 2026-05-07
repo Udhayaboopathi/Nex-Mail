@@ -51,6 +51,7 @@ infra/mail-certs/*.crt
 # ─── Mail data / Maildir ──────────────────────────────────────────────────────
 maildata/
 maildir/
+data/domain-branding/**
 
 # ─── Backups ──────────────────────────────────────────────────────────────────
 backups/

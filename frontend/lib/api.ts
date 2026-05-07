@@ -64,6 +64,28 @@ const patch = <T>(p: string, b?: unknown) => request<T>("PATCH", p, b);
 const put = <T>(p: string, b?: unknown) => request<T>("PUT", p, b);
 const del = <T>(p: string) => request<T>("DELETE", p);
 
+async function upload(path: string, file: File): Promise<{ [k: string]: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: {
+      ...authHeaders(),
+    },
+    body: form,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = `HTTP ${res.status}`;
+    try {
+      const j = JSON.parse(text);
+      if (j?.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  return res.json() as Promise<{ [k: string]: string }>;
+}
+
 // ─── Auth ──────────────────────────────────────────────────────────────────
 export const authApi = {
   login: (email: string, password: string) =>
@@ -138,6 +160,10 @@ export const superAdminApi = {
   getAuditLogs: (p = 1) => get<Paginated<AuditLog>>(`/api/super-admin/audit-logs?page=${p}`),
   triggerFullBackup: () => post<{ job_id: string }>("/api/super-admin/backup/full"),
   getBackups: () => get<BackupJob[]>("/api/super-admin/backups"),
+  uploadDomainLogo: (id: string, file: File) =>
+    upload(`/api/super-admin/domains/${id}/branding/logo-upload`, file),
+  uploadDomainVmc: (id: string, file: File) =>
+    upload(`/api/super-admin/domains/${id}/branding/vmc-upload`, file),
 };
 
 // ─── Domain Admin ─────────────────────────────────────────────────────────
@@ -181,6 +207,18 @@ export const domainAdminApi = {
     post<SharedMailbox>("/api/domain-admin/shared-mailboxes", data),
   getWhitelabel: () => get("/api/domain-admin/whitelabel"),
   updateWhitelabel: (data: unknown) => patch("/api/domain-admin/whitelabel", data),
+  uploadLogo: (file: File) => upload("/api/domain-admin/whitelabel/logo-upload", file),
+  uploadVmc: (file: File) => upload("/api/domain-admin/whitelabel/vmc-upload", file),
+  getBrandingReadiness: () =>
+    get<{
+      domain: string;
+      dmarc_ok: boolean;
+      dkim_ok: boolean;
+      spf_ok: boolean;
+      bimi_ok: boolean;
+      vmc_set: boolean;
+      all_ready: boolean;
+    }>("/api/domain-admin/whitelabel/readiness"),
   getRetention: () => get("/api/domain-admin/retention"),
   updateRetention: (data: { retention_days: number }) =>
     patch("/api/domain-admin/retention", data),

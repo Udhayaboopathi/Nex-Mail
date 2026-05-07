@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     smtp_submission_connect_host: str = ""
     smtp_submission_tls_insecure: bool = False  # If True, skip TLS cert verification (e.g. IP vs cert name).
     smtp_test_mail_from: str = ""
+    domain_branding_storage_dir: str = "/var/nexmail/domain-branding"
+    domain_branding_public_base_url: str = ""
     # When False, FastAPI skips Base.metadata.create_all on startup (use with Alembic).
     metadata_create_all_on_startup: bool = True
 
