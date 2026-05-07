@@ -13,9 +13,9 @@ the worker process and eliminates the cross-loop problem completely.
 Public API
 ----------
 task_db_session() – synchronous context manager; yields a sqlalchemy Session.
-run_async(coro)   – convenience helper: runs an async coroutine in a clean
-                    event loop so tasks that call async service helpers still
-                    work, but with a *fresh* loop every time.
+run_async(coro)   – runs the coroutine in a one-off event loop and disposes
+                    the shared async engine pool afterward so asyncpg
+                    connections are never reused across loops.
 """
 from contextlib import contextmanager
 from typing import Generator
@@ -60,13 +60,27 @@ def run_async(coro):
     """Run an async coroutine in a fresh event loop.
 
     Use this when you need to call an async service helper from a Celery
-    task.  A new event loop is created and destroyed for each call so there
-    is no risk of reusing loop-bound asyncpg connections.
+    task.  A new event loop is created and destroyed for each call.
+
+    The process-wide async engine (``backend.database.engine``) pools
+    asyncpg connections that are bound to the loop that created them.
+    Without disposing the pool after each run, the next ``run_async`` call
+    can pull a stale connection and raise *Future attached to a different
+    loop* or *another operation is in progress*.
     """
     import asyncio
+
+    from backend.database import engine
+
+    async def _run_with_cleanup():
+        try:
+            return await coro
+        finally:
+            await engine.dispose()
+
     loop = asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(coro)
+        return loop.run_until_complete(_run_with_cleanup())
     finally:
         try:
             # Cancel any pending tasks and close the loop cleanly.
