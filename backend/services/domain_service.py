@@ -152,6 +152,8 @@ async def sync_cloudflare_mail_dns(zone_id: str, api_token: str, domain_id: str)
                 if rows:
                     rid = rows[0]["id"]
                     pr = await client.patch(f"{api_base}/{rid}", headers=headers, json=merged)
+                    for extra in rows[1:]:
+                        await delete_record(extra.get("id", ""), f"{rtype} {name} duplicate")
                 else:
                     pr = await client.post(api_base, headers=headers, json=merged)
                 ok, err = await _cf_ok(pr)
@@ -189,6 +191,14 @@ async def sync_cloudflare_mail_dns(zone_id: str, api_token: str, domain_id: str)
                 steps.append(f"fail TXT SPF {apex}: {exc}")
 
         if server_ip:
+            # A and CNAME cannot coexist for same host; remove conflicting CNAME first.
+            try:
+                cname_rows = await list_records("CNAME", mail_host)
+                for row in cname_rows:
+                    await delete_record(row.get("id", ""), f"CNAME {mail_host} (conflicts with A)")
+            except Exception as exc:
+                all_ok = False
+                steps.append(f"fail cleanup CNAME {mail_host}: {exc}")
             await upsert_simple("A", mail_host, {"content": server_ip})
         else:
             steps.append("skip A (set SERVER_IP in backend .env for automatic mail host A record)")
