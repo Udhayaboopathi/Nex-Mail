@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { Plus, Pencil, Trash2, KeyRound, Search } from "lucide-react";
 import CreateMailboxModal from "../../../components/domain-admin/CreateMailboxModal";
 import EditMailboxModal from "../../../components/domain-admin/EditMailboxModal";
-import CreateAliasModal from "../../../components/domain-admin/CreateAliasModal";
 import { ResetPasswordModal } from "../../../components/domain-admin/ResetPasswordModal";
 import { Badge } from "../../../components/ui/Badge";
 import { ProgressBar } from "../../../components/ui/ProgressBar";
@@ -19,7 +18,6 @@ export default function MailboxesPage() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
-  const [aliasOpen, setAliasOpen] = useState(false);
   const [editing, setEditing] = useState<Mailbox | null>(null);
   const [resetTarget, setResetTarget] = useState<Mailbox | null>(null);
 
@@ -51,9 +49,6 @@ export default function MailboxesPage() {
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{total} total</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => setAliasOpen(true)} className="flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 text-sm hover:bg-gray-50 dark:hover:bg-gray-800">
-            Create Alias
-          </button>
           <button onClick={() => setCreateOpen(true)} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium">
             <Plus className="w-4 h-4" /> Create Mailbox
           </button>
@@ -134,7 +129,6 @@ export default function MailboxesPage() {
 
       {/* Modals */}
       <CreateMailboxModal open={createOpen} onClose={() => setCreateOpen(false)} onCreate={() => load()} />
-      <CreateAliasModal open={aliasOpen} onClose={() => setAliasOpen(false)} onCreate={() => load()} />
       {editing && (
         <EditMailboxModal
           open

@@ -32,6 +32,9 @@ export function EmailReader({ email, folder, threadMessages = [], onReply, onFor
   const [aiLoading, setAiLoading] = useState(false);
   const [decrypted, setDecrypted] = useState<string | null>(null);
   const [headerExpanded, setHeaderExpanded] = useState(false);
+  const toList = Array.isArray(email.to) ? email.to : [];
+  const ccList = Array.isArray(email.cc) ? email.cc : [];
+  const fromText = typeof email.from === "string" ? email.from : "";
 
   const iframeSrc = imagesBlocked
     ? `<!DOCTYPE html><html><head><style>img,iframe,embed{display:none!important}</style></head><body style="font-family:sans-serif;font-size:14px;line-height:1.6;color:#1f2937;">${email.body_html ?? ""}</body></html>`
@@ -67,7 +70,7 @@ export function EmailReader({ email, folder, threadMessages = [], onReply, onFor
 
   async function handleDecrypt() {
     try {
-      const res = await pgpApi.lookupKey(email.from) as { plaintext?: string };
+      const res = await pgpApi.lookupKey(fromText) as { plaintext?: string };
       setDecrypted(res.plaintext ?? "(decryption failed)");
     } catch {
       toast("Could not decrypt message", "error");
@@ -171,10 +174,10 @@ export function EmailReader({ email, folder, threadMessages = [], onReply, onFor
         </h1>
 
         <div className="flex items-start gap-3 mb-4">
-          <Avatar email={email.from} />
+          <Avatar email={fromText} />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-medium text-gray-900 dark:text-white text-sm">{email.from}</span>
+              <span className="font-medium text-gray-900 dark:text-white text-sm">{fromText}</span>
               {email.labels?.map((l) => (
                 <span key={l.id} className="px-1.5 py-0.5 rounded text-xs text-white" style={{ background: l.color }}>
                   {l.name}
@@ -185,15 +188,15 @@ export function EmailReader({ email, folder, threadMessages = [], onReply, onFor
               onClick={() => setHeaderExpanded((o) => !o)}
               className="flex items-center gap-1 text-xs text-gray-400 mt-0.5 hover:text-gray-600 dark:hover:text-gray-300"
             >
-              to {email.to.join(", ").slice(0, 50)}
-              {email.cc?.length ? `, cc ${email.cc.join(", ")}` : ""}
+              to {toList.join(", ").slice(0, 50)}
+              {ccList.length ? `, cc ${ccList.join(", ")}` : ""}
               {headerExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
             </button>
             {headerExpanded && (
               <div className="mt-2 text-xs text-gray-500 dark:text-gray-400 space-y-0.5">
-                <p><span className="font-medium">From:</span> {email.from}</p>
-                <p><span className="font-medium">To:</span> {email.to.join(", ")}</p>
-                {email.cc?.length ? <p><span className="font-medium">CC:</span> {email.cc.join(", ")}</p> : null}
+                <p><span className="font-medium">From:</span> {fromText}</p>
+                <p><span className="font-medium">To:</span> {toList.join(", ")}</p>
+                {ccList.length ? <p><span className="font-medium">CC:</span> {ccList.join(", ")}</p> : null}
                 <p><span className="font-medium">Date:</span> {formatDate(email.date, { dateStyle: "long", timeStyle: "short" })}</p>
                 <p><span className="font-medium">Message-ID:</span> {email.message_id}</p>
               </div>
@@ -224,7 +227,7 @@ export function EmailReader({ email, folder, threadMessages = [], onReply, onFor
                 const el = e.currentTarget;
                 el.style.height = (el.contentDocument?.body?.scrollHeight ?? 400) + 32 + "px";
               }}
-              title={`Email from ${email.from}`}
+              title={`Email from ${fromText}`}
             />
           ) : (
             <pre className="p-4 whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300">

@@ -63,6 +63,10 @@ def _dkim_domain_for_from(from_addr: str) -> str:
     return from_addr.split("@")[-1].lower().strip()
 
 
+def _forced_dkim_signing_enabled() -> bool:
+    return bool((settings.dkim_signing_domain or "").strip())
+
+
 async def _load_dkim_key(from_addr: str) -> tuple[str, bytes] | None:
     domain_name = _dkim_domain_for_from(from_addr)
     async with AsyncSessionLocal() as db:
@@ -104,6 +108,11 @@ async def send_direct(from_addr: str, to_list: list[str], subject: str, body_tex
             sender_mailbox_id = mailbox.id
 
     dkim_data = await _load_dkim_key(from_addr)
+    if _forced_dkim_signing_enabled() and dkim_data is None:
+        forced_domain = _dkim_domain_for_from(from_addr)
+        raise SMTPDeliveryError(
+            f"Forced DKIM signing is enabled but no DKIM key is configured for '{forced_domain}'."
+        )
     raw = msg.as_bytes()
     if dkim_data:
         selector, private_key = dkim_data
@@ -196,6 +205,11 @@ async def relay_mx_raw(mail_from: str, recipients: list[str], raw: bytes) -> Non
         return
     logger.info('relay_mx_raw start mail_from=%s recipients=%s', mail_from, recipients)
     dkim_data = await _load_dkim_key(mail_from)
+    if _forced_dkim_signing_enabled() and dkim_data is None:
+        forced_domain = _dkim_domain_for_from(mail_from)
+        raise SMTPDeliveryError(
+            f"Forced DKIM signing is enabled but no DKIM key is configured for '{forced_domain}'."
+        )
     logger.info('relay_mx_raw after DKIM mail_from=%s signed=%s', mail_from, bool(dkim_data))
     out = raw
     if dkim_data:

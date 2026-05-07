@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Shield, Tag, Globe, FileText, Users } from "lucide-react";
+import { Shield, Tag, Globe, FileText, Users, ScrollText } from "lucide-react";
 
 const links = [
   { href: "/domain-admin/whitelabel", icon: Tag, label: "Whitelabel", desc: "Company name, logo, and brand color" },
   { href: "/domain-admin/retention", icon: FileText, label: "Retention", desc: "Auto-delete emails after N days" },
   { href: "/domain-admin/dns", icon: Globe, label: "DNS", desc: "Verify and configure DNS records" },
+  { href: "/domain-admin/audit", icon: ScrollText, label: "Audit Logs", desc: "Domain activity and security events" },
   { href: "/domain-admin/shared", icon: Users, label: "Shared Mailboxes", desc: "Manage shared team inboxes" },
   { href: "/domain-admin/ediscovery", icon: Shield, label: "eDiscovery", desc: "Compliance search and export" },
 ];

@@ -19,7 +19,6 @@ import {
   FileText,
   Shield,
   BarChart2,
-  RefreshCcw,
   Search,
   Mail,
 } from "lucide-react";
@@ -49,14 +48,11 @@ const userNav = [
 const domainAdminNav = [
   { href: "/domain-admin", icon: BarChart2, label: "Dashboard" },
   { href: "/domain-admin/mailboxes", icon: Mail, label: "Mailboxes" },
-  { href: "/domain-admin/aliases", icon: RefreshCcw, label: "Aliases" },
-  { href: "/domain-admin/dns", icon: Globe, label: "DNS" },
   { href: "/domain-admin/shared", icon: Users, label: "Shared" },
   { href: "/domain-admin/backup", icon: Archive, label: "Backup" },
   { href: "/domain-admin/whitelabel", icon: Tag, label: "Whitelabel" },
   { href: "/domain-admin/ediscovery", icon: Search, label: "eDiscovery" },
   { href: "/domain-admin/retention", icon: FileText, label: "Retention" },
-  { href: "/domain-admin/audit", icon: Shield, label: "Audit Logs" },
   { href: "/domain-admin/settings", icon: Settings, label: "Settings" },
 ];
 
