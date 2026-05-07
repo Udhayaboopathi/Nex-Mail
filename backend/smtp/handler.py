@@ -25,7 +25,10 @@ def _fallback_maildir_path(rcpt: str) -> str:
 
 def _store_to_maildir(maildir_path: str, parsed: Message, folder: str) -> None:
     root = Path(maildir_path)
+    # Ensure Maildir root and parent directories exist before creating the mailbox.
+    root.mkdir(parents=True, exist_ok=True)
     target = root if folder == "Inbox" else root / f".{folder}"
+    target.mkdir(parents=True, exist_ok=True)
     maildir = Maildir(target.as_posix(), create=True)
     maildir.add(parsed.as_bytes())
 
