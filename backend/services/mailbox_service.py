@@ -6,6 +6,7 @@ import re
 import uuid
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from backend.config import settings
 from backend.core.security import hash_password
@@ -61,9 +62,56 @@ async def create_mailbox(
         if existing:
             raise ValueError(f"Address {full_address} already exists.")
 
-        user = User(email=full_address, hashed_password=hash_password(password), role="user")
-        db.add(user)
-        await db.flush()
+        user = (await db.execute(select(User).where(User.email == full_address))).scalar_one_or_none()
+        if user is None:
+            user = User(email=full_address, hashed_password=hash_password(password), role="user")
+            db.add(user)
+            try:
+                await db.flush()
+            except IntegrityError:
+                # Another request may have created this user concurrently.
+                await db.rollback()
+                async with AsyncSessionLocal() as db_retry:
+                    domain_retry: Domain | None = (
+                        await db_retry.execute(select(Domain).where(Domain.id == dom_uuid))
+                    ).scalar_one_or_none()
+                    if not domain_retry:
+                        raise ValueError("Domain not found.")
+                    existing_mb = await db_retry.scalar(
+                        select(Mailbox.id).where(Mailbox.full_address == full_address)
+                    )
+                    if existing_mb:
+                        raise ValueError(f"Address {full_address} already exists.")
+                    user = (
+                        await db_retry.execute(select(User).where(User.email == full_address))
+                    ).scalar_one_or_none()
+                    if user is None:
+                        raise ValueError(f"Address {full_address} already exists.")
+                    maildir = os.path.join(settings.maildir_base, domain_retry.name, local)
+                    mb = Mailbox(
+                        user_id=user.id,
+                        domain_id=domain_retry.id,
+                        local_part=local,
+                        display_name=dn,
+                        full_address=full_address,
+                        quota_mb=int(quota_mb),
+                        maildir_path=maildir,
+                    )
+                    db_retry.add(mb)
+                    await db_retry.commit()
+                    await db_retry.refresh(mb)
+                return {
+                    "id": str(mb.id),
+                    "full_address": mb.full_address,
+                    "quota_mb": mb.quota_mb,
+                    "is_active": mb.is_active,
+                    "display_name": mb.display_name,
+                }
+        else:
+            # Reusing existing identity for recreated mailbox address.
+            user.hashed_password = hash_password(password)
+            if user.role != "super_admin":
+                user.role = "user"
 
         maildir = os.path.join(settings.maildir_base, domain.name, local)
         mb = Mailbox(
