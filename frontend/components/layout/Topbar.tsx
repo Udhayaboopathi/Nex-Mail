@@ -8,13 +8,14 @@ import { Avatar } from "../ui/Avatar";
 
 interface TopbarProps {
   email: string;
+  domainName?: string;
   onMenuToggle?: () => void;
   onSearchChange?: (q: string) => void;
   onThemeToggle?: () => void;
   isDark?: boolean;
 }
 
-export function Topbar({ email, onMenuToggle, onSearchChange, onThemeToggle, isDark }: TopbarProps) {
+export function Topbar({ email, domainName, onMenuToggle, onSearchChange, onThemeToggle, isDark }: TopbarProps) {
   const router = useRouter();
   const [query, setQuery] = useState("");
 
@@ -60,6 +61,14 @@ export function Topbar({ email, onMenuToggle, onSearchChange, onThemeToggle, isD
       )}
 
       <div className="flex items-center gap-1 ml-auto">
+        {domainName && (
+          <span
+            title={domainName}
+            className="hidden sm:inline-flex mr-2 px-2.5 py-1 rounded-md border border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-700 dark:text-gray-300"
+          >
+            {domainName}
+          </span>
+        )}
         {/* Notifications placeholder */}
         <button className="p-2 rounded-md text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800">
           <Bell className="w-5 h-5" />
