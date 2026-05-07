@@ -7,6 +7,9 @@ export function cn(...inputs: ClassValue[]): string {
 
 export function formatDate(dateStr: string, opts?: Intl.DateTimeFormatOptions): string {
   const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) {
+    return "";
+  }
   const now = new Date();
   const diffMs = now.getTime() - d.getTime();
   const diffDays = Math.floor(diffMs / 86400000);
@@ -19,7 +22,11 @@ export function formatDate(dateStr: string, opts?: Intl.DateTimeFormatOptions): 
     if (diffDays < 7) return d.toLocaleDateString([], { weekday: "short" });
     return d.toLocaleDateString([], { month: "short", day: "numeric" });
   }
-  return d.toLocaleDateString(undefined, opts);
+  try {
+    return d.toLocaleDateString(undefined, opts);
+  } catch {
+    return "";
+  }
 }
 
 export function formatBytes(bytes: number, decimals = 1): string {
