@@ -56,6 +56,7 @@ class Mailbox(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     domain_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("domains.id", ondelete="CASCADE"), nullable=False)
     local_part: Mapped[str] = mapped_column(String(64), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(200))
     full_address: Mapped[str] = mapped_column(String(319), unique=True, nullable=False)
     quota_mb: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1024")
     used_mb: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")

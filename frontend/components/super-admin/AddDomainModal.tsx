@@ -13,14 +13,21 @@ interface AddDomainModalProps {
 export function AddDomainModal({ onClose, onAdded }: AddDomainModalProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [domainName, setDomainName] = useState("");
+  const [storageQuotaGb, setStorageQuotaGb] = useState("10");
   const [saving, setSaving] = useState(false);
   const [created, setCreated] = useState(false);
 
   async function handleCreate() {
     if (!domainName.trim()) { toast("Enter a domain name", "error"); return; }
+    const q = parseInt(storageQuotaGb, 10);
+    if (Number.isNaN(q) || q < 1) { toast("Enter a valid total storage (GB), at least 1.", "error"); return; }
+    if (q > 2048) { toast("Maximum domain storage is 2048 GB.", "error"); return; }
     setSaving(true);
     try {
-      await superAdminApi.createDomain(domainName.trim().toLowerCase());
+      await superAdminApi.createDomain({
+        name: domainName.trim().toLowerCase(),
+        storage_quota_gb: q,
+      });
       setCreated(true);
       setStep(2);
     } catch (err) {
@@ -59,7 +66,10 @@ export function AddDomainModal({ onClose, onAdded }: AddDomainModalProps) {
             <div className="space-y-4">
               <div className="flex items-center gap-3 p-3 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 text-sm">
                 <Globe className="w-5 h-5 shrink-0" />
-                <span>Enter the domain you want to add. A DKIM keypair will be generated automatically.</span>
+                <span>
+                  Enter the domain you want to add. A DKIM keypair will be generated automatically. Set the total
+                  storage pool (GB) for this domain — the domain admin splits it across mailboxes.
+                </span>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Domain name</label>
@@ -70,6 +80,21 @@ export function AddDomainModal({ onClose, onAdded }: AddDomainModalProps) {
                   className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   onKeyDown={(e) => e.key === "Enter" && handleCreate()}
                 />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Total storage (GB)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={2048}
+                  value={storageQuotaGb}
+                  onChange={(e) => setStorageQuotaGb(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Domain admin allocates this across all mailboxes.</p>
               </div>
             </div>
           )}

@@ -101,7 +101,8 @@ export const superAdminApi = {
   sendTestMail: (to: string) =>
     post<{ ok: boolean; detail: string | null }>("/api/super-admin/mail/test", { to }),
   getDomains: () => get<Domain[]>("/api/super-admin/domains"),
-  createDomain: (name: string) => post<Domain>("/api/super-admin/domains", { name }),
+  createDomain: (body: { name: string; storage_quota_gb?: number }) =>
+    post<Domain>("/api/super-admin/domains", body),
   updateDomain: (id: string, data: Partial<Domain>) =>
     patch<Domain>(`/api/super-admin/domains/${id}`, data),
   deleteDomain: (id: string) => del(`/api/super-admin/domains/${id}`),
@@ -143,15 +144,23 @@ export const superAdminApi = {
 export const domainAdminApi = {
   getStats: () => get<DomainAdminStats>("/api/domain-admin/stats"),
   getOnboarding: () => get("/api/domain-admin/onboarding"),
+  getAdminDomain: () =>
+    get<{ id: string; name: string; storage_quota_gb: number; used_storage_gb: number }>(
+      "/api/domain-admin/domain"
+    ),
   getMailboxes: (search = "", page = 1) =>
     get<Paginated<Mailbox>>(`/api/domain-admin/mailboxes?search=${encodeURIComponent(search)}&page=${page}`),
-  createMailbox: (data: { local_part: string; password: string; quota_mb?: number }) =>
-    post<Mailbox>("/api/domain-admin/mailboxes", data),
+  createMailbox: (data: {
+    local_part: string;
+    password: string;
+    quota_mb?: number;
+    display_name?: string | null;
+  }) => post<Mailbox>("/api/domain-admin/mailboxes", data),
   updateMailbox: (id: string, data: Partial<Mailbox>) =>
     patch<Mailbox>(`/api/domain-admin/mailboxes/${id}`, data),
   deleteMailbox: (id: string) => del(`/api/domain-admin/mailboxes/${id}`),
-  resetMailboxPassword: (id: string, password: string) =>
-    post(`/api/domain-admin/mailboxes/${id}/reset-password`, { password }),
+  resetMailboxPassword: (id: string, newPassword: string) =>
+    post(`/api/domain-admin/mailboxes/${id}/reset-password`, { new_password: newPassword }),
   getAliases: () => get<Alias[]>("/api/domain-admin/aliases"),
   createAlias: (data: { source_address: string; destination_address: string; is_catch_all?: boolean }) =>
     post<Alias>("/api/domain-admin/aliases", data),

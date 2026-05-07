@@ -48,6 +48,7 @@ export interface Mailbox {
   user_id: string;
   domain_id: string;
   local_part: string;
+  display_name?: string | null;
   full_address: string;
   quota_mb: number;
   used_mb: number;

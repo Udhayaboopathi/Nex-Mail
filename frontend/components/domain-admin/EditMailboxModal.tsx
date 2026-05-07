@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { domainAdminApi } from "../../lib/api";
 import { toast } from "../ui/Toast";
@@ -8,6 +8,7 @@ import { toast } from "../ui/Toast";
 interface EditMailboxModalProps {
   open: boolean;
   mailboxId: string;
+  initialDisplayName?: string;
   initialQuotaMb: number;
   initialIsActive: boolean;
   onClose: () => void;
@@ -17,21 +18,34 @@ interface EditMailboxModalProps {
 export default function EditMailboxModal({
   open,
   mailboxId,
+  initialDisplayName = "",
   initialQuotaMb,
   initialIsActive,
   onClose,
   onSave,
 }: EditMailboxModalProps) {
+  const [displayName, setDisplayName] = useState(initialDisplayName);
   const [quotaMb, setQuotaMb] = useState(String(initialQuotaMb));
   const [isActive, setIsActive] = useState(initialIsActive);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setDisplayName(initialDisplayName);
+    setQuotaMb(String(initialQuotaMb));
+    setIsActive(initialIsActive);
+  }, [open, mailboxId, initialDisplayName, initialQuotaMb, initialIsActive]);
 
   if (!open) return null;
 
   async function save() {
     setBusy(true);
     try {
-      await domainAdminApi.updateMailbox(mailboxId, { quota_mb: Number(quotaMb), is_active: isActive });
+      await domainAdminApi.updateMailbox(mailboxId, {
+        display_name: displayName.trim() || null,
+        quota_mb: Number(quotaMb),
+        is_active: isActive,
+      });
       toast("Mailbox updated!", "success");
       onSave();
       onClose();
@@ -47,6 +61,16 @@ export default function EditMailboxModal({
           <button onClick={onClose} className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800"><X className="w-4 h-4 text-gray-500" /></button>
         </div>
         <div className="px-5 py-5 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Full name</label>
+            <input
+              type="text"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="Display name"
+              className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+          </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Quota (MB)</label>
             <input type="number" value={quotaMb} onChange={(e) => setQuotaMb(e.target.value)} min={64}

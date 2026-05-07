@@ -19,6 +19,7 @@ from backend.services.domain_service import (
     create_domain as provision_domain_with_dkim,
     dkim_txt_dns_name,
     fetch_cloudflare_zone_id,
+    mail_hostname_for_domain,
     sync_cloudflare_mail_dns,
     verify_dns,
 )
@@ -101,6 +102,12 @@ class DomainItem(BaseModel):
 
 class CreateDomainRequest(BaseModel):
     name: str = Field(min_length=3, max_length=253)
+    storage_quota_gb: int | None = Field(
+        default=None,
+        ge=1,
+        le=2048,
+        description="Total storage pool (GB) for the domain; domain admin splits it across mailboxes.",
+    )
 
 
 class UpdateDomainRequest(BaseModel):
@@ -369,7 +376,7 @@ async def list_domains() -> list[DomainItem]:
 async def create_domain(payload: CreateDomainRequest) -> DomainItem:
     name = payload.name.strip().lower()
     try:
-        await provision_domain_with_dkim(name)
+        await provision_domain_with_dkim(name, storage_quota_gb=payload.storage_quota_gb)
     except ValueError as exc:
         if "already exists" in str(exc).lower():
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -567,12 +574,22 @@ async def verify_domain_dns(domain_id: str) -> dict:
     try:
         result = await verify_dns(domain_id)
         records = result.get("records", {})
+        dom = result.get("domain", "")
+        sel = result.get("dkim_selector") or "mail"
+        dkim_rec = records.get("dkim", {})
+        dkim_name = f"{sel}._domainkey.{dom}"
         return {
-            "mx": {"type": "MX", "name": result.get("domain", ""), "value": records.get("mx", {}).get("value", ""), "valid": bool(records.get("mx", {}).get("ok")), "current": records.get("mx", {}).get("value")},
-            "a": {"type": "A", "name": result.get("domain", ""), "value": result.get("domain", ""), "valid": True},
-            "spf": {"type": "TXT", "name": result.get("domain", ""), "value": records.get("spf", {}).get("value", ""), "valid": bool(records.get("spf", {}).get("ok")), "current": records.get("spf", {}).get("value")},
-            "dkim": {"type": "TXT", "name": f"mail._domainkey.{result.get('domain', '')}", "value": records.get("dkim", {}).get("value", ""), "valid": bool(records.get("dkim", {}).get("ok")), "current": records.get("dkim", {}).get("value")},
-            "dmarc": {"type": "TXT", "name": f"_dmarc.{result.get('domain', '')}", "value": records.get("dmarc", {}).get("value", ""), "valid": bool(records.get("dmarc", {}).get("ok")), "current": records.get("dmarc", {}).get("value")},
+            "mx": {"type": "MX", "name": dom, "value": records.get("mx", {}).get("value", ""), "valid": bool(records.get("mx", {}).get("ok")), "current": records.get("mx", {}).get("value")},
+            "a": {"type": "A", "name": dom, "value": dom, "valid": True},
+            "spf": {"type": "TXT", "name": dom, "value": records.get("spf", {}).get("value", ""), "valid": bool(records.get("spf", {}).get("ok")), "current": records.get("spf", {}).get("value")},
+            "dkim": {
+                "type": "TXT",
+                "name": dkim_name,
+                "value": dkim_rec.get("value", "") or dkim_rec.get("error", ""),
+                "valid": bool(dkim_rec.get("ok")),
+                "current": (dkim_rec.get("error") or dkim_rec.get("value", "")) if not dkim_rec.get("ok") else dkim_rec.get("value", ""),
+            },
+            "dmarc": {"type": "TXT", "name": f"_dmarc.{dom}", "value": records.get("dmarc", {}).get("value", ""), "valid": bool(records.get("dmarc", {}).get("ok")), "current": records.get("dmarc", {}).get("value")},
             "all_valid": bool(result.get("all_ok")),
         }
     except Exception as exc:
@@ -591,15 +608,21 @@ async def get_dns_guide(domain_id: str) -> dict:
         if domain is None:
             raise HTTPException(status_code=404, detail="Domain not found")
 
+    mh = mail_hostname_for_domain(domain)
+    sel = domain.dkim_selector or settings.dkim_selector
+    dkim_txt = build_dkim_txt_record(domain) or ""
+    spf_v = domain.spf_record or f"v=spf1 mx a:{mh} ~all"
+    dmarc_v = domain.dmarc_record or f"v=DMARC1; p=quarantine; rua=mailto:dmarc@{domain.name}"
+    a_hint = (settings.server_ip or "").strip() or "YOUR_SERVER_IP"
+
+    # Same flat shape as POST …/dns/verify so the DNS Setup modal can render without clicking Verify.
     return {
-        "domain": domain.name,
-        "records": {
-            "mx": {"type": "MX", "name": domain.name, "value": f"10 mail.{domain.name}"},
-            "a": {"type": "A", "name": f"mail.{domain.name}", "value": "YOUR_SERVER_IP"},
-            "spf": {"type": "TXT", "name": domain.name, "value": domain.spf_record or f"v=spf1 mx a:{domain.name} ~all"},
-            "dkim": {"type": "TXT", "name": f"{domain.dkim_selector}._domainkey.{domain.name}", "value": "v=DKIM1; k=rsa; p=<public-key>"},
-            "dmarc": {"type": "TXT", "name": f"_dmarc.{domain.name}", "value": domain.dmarc_record or f"v=DMARC1; p=quarantine; rua=mailto:dmarc@{domain.name}"},
-        },
+        "mx": {"type": "MX", "name": domain.name, "value": f"10 {mh}", "valid": False},
+        "a": {"type": "A", "name": mh, "value": a_hint, "valid": False},
+        "spf": {"type": "TXT", "name": domain.name, "value": spf_v, "valid": False},
+        "dkim": {"type": "TXT", "name": f"{sel}._domainkey.{domain.name}", "value": dkim_txt, "valid": False},
+        "dmarc": {"type": "TXT", "name": f"_dmarc.{domain.name}", "value": dmarc_v, "valid": False},
+        "all_valid": False,
     }
 
 

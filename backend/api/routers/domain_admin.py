@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 
-from backend.api.deps import require_any_auth
+from backend.api.deps import require_any_auth, require_domain_admin
 from backend.database import AsyncSessionLocal
 from backend.models import Alias, AuditLog, Domain, Mailbox, User
 
@@ -39,6 +39,7 @@ class MailboxItem(BaseModel):
     user_id: str
     domain_id: str
     local_part: str
+    display_name: str | None = None
     full_address: str
     quota_mb: int
     used_mb: float
@@ -53,15 +54,23 @@ class MailboxListResponse(BaseModel):
 
 
 class CreateMailboxRequest(BaseModel):
-    user_id: str
-    domain_id: str
-    local_part: str = Field(min_length=1, max_length=64)
+    local_part: str = Field(min_length=1, max_length=64, description="Email alias before @ (e.g. udhaya)")
+    password: str = Field(min_length=8, max_length=256)
     quota_mb: int = Field(default=1024, ge=64, le=102400)
+    display_name: str | None = Field(default=None, max_length=200, description="Full display name for the user")
+
+
+class AdminDomainContext(BaseModel):
+    id: str
+    name: str
+    storage_quota_gb: int
+    used_storage_gb: float
 
 
 class UpdateMailboxRequest(BaseModel):
     quota_mb: int | None = Field(default=None, ge=64, le=102400)
     is_active: bool | None = None
+    display_name: str | None = Field(default=None, max_length=200)
 
 
 class ResetPasswordRequest(BaseModel):
@@ -135,6 +144,7 @@ def _mb_item(m: Mailbox) -> MailboxItem:
         user_id=str(m.user_id),
         domain_id=str(m.domain_id),
         local_part=m.local_part or "",
+        display_name=m.display_name,
         full_address=m.full_address or "",
         quota_mb=int(m.quota_mb or 0),
         used_mb=float(m.used_mb or 0),
@@ -142,6 +152,17 @@ def _mb_item(m: Mailbox) -> MailboxItem:
         last_login_at=m.last_login_at.isoformat() if m.last_login_at else None,
         created_at=m.created_at.isoformat() if m.created_at else None,
     )
+
+
+async def _scoped_domain(user: dict) -> Domain | None:
+    """Domain for this admin (assigned domain, or first domain for super_admin)."""
+    async with AsyncSessionLocal() as db:
+        uid = UUID(user["id"])
+        if user.get("role") == "super_admin":
+            return (
+                await db.execute(select(Domain).order_by(Domain.created_at.asc()).limit(1))
+            ).scalar_one_or_none()
+        return (await db.execute(select(Domain).where(Domain.admin_user_id == uid))).scalar_one_or_none()
 
 
 def _alias_item(a: Alias) -> AliasItem:
@@ -197,16 +218,34 @@ async def get_onboarding(user: dict = Depends(require_any_auth)) -> OnboardingRe
 
 # ── Mailboxes ────────────────────────────────────────────────────────────────
 
+@router.get("/domain", response_model=AdminDomainContext)
+async def get_admin_domain(user: dict = Depends(require_domain_admin)) -> AdminDomainContext:
+    d = await _scoped_domain(user)
+    if d is None:
+        raise HTTPException(status_code=404, detail="No domain found for this account.")
+    return AdminDomainContext(
+        id=str(d.id),
+        name=d.name,
+        storage_quota_gb=int(d.storage_quota_gb or 10),
+        used_storage_gb=float(d.used_storage_gb or 0),
+    )
+
+
 @router.get("/mailboxes", response_model=MailboxListResponse)
 async def list_mailboxes(
     search: str = "",
     status: str = "",
     page: int = 1,
     limit: int = 50,
-    user: dict = Depends(require_any_auth),
+    user: dict = Depends(require_domain_admin),
 ) -> MailboxListResponse:
+    dom = await _scoped_domain(user)
+    if user.get("role") != "super_admin" and dom is None:
+        return MailboxListResponse(items=[], total=0)
     async with AsyncSessionLocal() as db:
         stmt = select(Mailbox).order_by(Mailbox.created_at.desc())
+        if user.get("role") != "super_admin" and dom is not None:
+            stmt = stmt.where(Mailbox.domain_id == dom.id)
         if search:
             stmt = stmt.where(Mailbox.full_address.ilike(f"%{search}%"))
         if status == "active":
@@ -219,31 +258,38 @@ async def list_mailboxes(
 
 
 @router.post("/mailboxes", response_model=MailboxItem)
-async def create_mailbox(payload: CreateMailboxRequest, user: dict = Depends(require_any_auth)) -> MailboxItem:
+async def create_mailbox(payload: CreateMailboxRequest, user: dict = Depends(require_domain_admin)) -> MailboxItem:
+    d = await _scoped_domain(user)
+    if d is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No domain is assigned to this account. A super-admin must add a domain and assign you as domain admin.",
+        )
+    from backend.services.mailbox_service import create_mailbox as mailbox_create
+
     try:
-        domain_id = UUID(payload.domain_id)
-        user_id = UUID(payload.user_id)
+        await mailbox_create(
+            domain_id=str(d.id),
+            local_part=payload.local_part,
+            password=payload.password,
+            quota_mb=payload.quota_mb,
+            display_name=payload.display_name,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid domain_id or user_id") from exc
+        msg = str(exc)
+        if "already exists" in msg.lower():
+            raise HTTPException(status_code=409, detail=msg) from exc
+        raise HTTPException(status_code=400, detail=msg) from exc
+
+    local = payload.local_part.strip().lower()
+    full = f"{local}@{d.name.lower()}"
     async with AsyncSessionLocal() as db:
-        domain_row = (await db.execute(select(Domain).where(Domain.id == domain_id))).scalar_one_or_none()
-        user_row = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-        if domain_row is None or user_row is None:
-            raise HTTPException(status_code=404, detail="Domain or user not found")
-        local = payload.local_part.strip().lower()
-        full = f"{local}@{domain_row.name}"
-        existing = (await db.execute(select(Mailbox).where(Mailbox.full_address == full))).scalar_one_or_none()
-        if existing:
-            raise HTTPException(status_code=409, detail="Mailbox already exists")
-        mb = Mailbox(user_id=user_id, domain_id=domain_id, local_part=local, full_address=full, quota_mb=payload.quota_mb, is_active=True, maildir_path=f"/var/mail/{domain_row.name}/{local}")
-        db.add(mb)
-        await db.commit()
-        await db.refresh(mb)
+        mb = (await db.execute(select(Mailbox).where(Mailbox.full_address == full))).scalar_one()
     return _mb_item(mb)
 
 
 @router.get("/mailboxes/{mailbox_id}", response_model=MailboxItem)
-async def get_mailbox(mailbox_id: str, user: dict = Depends(require_any_auth)) -> MailboxItem:
+async def get_mailbox(mailbox_id: str, user: dict = Depends(require_domain_admin)) -> MailboxItem:
     try:
         mid = UUID(mailbox_id)
     except ValueError as exc:
@@ -256,7 +302,7 @@ async def get_mailbox(mailbox_id: str, user: dict = Depends(require_any_auth)) -
 
 
 @router.patch("/mailboxes/{mailbox_id}", response_model=MailboxItem)
-async def update_mailbox(mailbox_id: str, payload: UpdateMailboxRequest, user: dict = Depends(require_any_auth)) -> MailboxItem:
+async def update_mailbox(mailbox_id: str, payload: UpdateMailboxRequest, user: dict = Depends(require_domain_admin)) -> MailboxItem:
     try:
         mid = UUID(mailbox_id)
     except ValueError as exc:
@@ -266,16 +312,35 @@ async def update_mailbox(mailbox_id: str, payload: UpdateMailboxRequest, user: d
         if mb is None:
             raise HTTPException(status_code=404, detail="Mailbox not found")
         if payload.quota_mb is not None:
+            dom = (await db.execute(select(Domain).where(Domain.id == mb.domain_id))).scalar_one_or_none()
+            if dom:
+                pool_mb = max(int(dom.storage_quota_gb or 10), 1) * 1024
+                others = int(
+                    await db.scalar(
+                        select(func.coalesce(func.sum(Mailbox.quota_mb), 0)).where(
+                            Mailbox.domain_id == mb.domain_id,
+                            Mailbox.id != mb.id,
+                        )
+                    )
+                    or 0
+                )
+                if others + int(payload.quota_mb) > pool_mb:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Mailbox quota would exceed domain storage pool ({pool_mb} MB).",
+                    )
             mb.quota_mb = payload.quota_mb
         if payload.is_active is not None:
             mb.is_active = payload.is_active
+        if payload.display_name is not None:
+            mb.display_name = payload.display_name.strip() or None
         await db.commit()
         await db.refresh(mb)
     return _mb_item(mb)
 
 
 @router.post("/mailboxes/{mailbox_id}/reset-password")
-async def reset_mailbox_password(mailbox_id: str, payload: ResetPasswordRequest, user: dict = Depends(require_any_auth)) -> dict[str, bool]:
+async def reset_mailbox_password(mailbox_id: str, payload: ResetPasswordRequest, user: dict = Depends(require_domain_admin)) -> dict[str, bool]:
     try:
         mid = UUID(mailbox_id)
     except ValueError as exc:
@@ -293,7 +358,7 @@ async def reset_mailbox_password(mailbox_id: str, payload: ResetPasswordRequest,
 
 
 @router.delete("/mailboxes/{mailbox_id}")
-async def delete_mailbox(mailbox_id: str, user: dict = Depends(require_any_auth)) -> dict[str, bool]:
+async def delete_mailbox(mailbox_id: str, user: dict = Depends(require_domain_admin)) -> dict[str, bool]:
     try:
         mid = UUID(mailbox_id)
     except ValueError as exc:
@@ -302,7 +367,12 @@ async def delete_mailbox(mailbox_id: str, user: dict = Depends(require_any_auth)
         mb = (await db.execute(select(Mailbox).where(Mailbox.id == mid))).scalar_one_or_none()
         if mb is None:
             raise HTTPException(status_code=404, detail="Mailbox not found")
+        uid = mb.user_id
         await db.delete(mb)
+        await db.flush()
+        orphan = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        if orphan:
+            await db.delete(orphan)
         await db.commit()
     return {"ok": True}
 

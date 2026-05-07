@@ -5,6 +5,7 @@ import { Plus, MoreVertical, CheckCircle, XCircle, Search } from "lucide-react";
 import { superAdminApi } from "../../../lib/api";
 import { AddDomainModal } from "../../../components/super-admin/AddDomainModal";
 import { AssignAdminModal } from "../../../components/super-admin/AssignAdminModal";
+import { IncreaseStorageModal } from "../../../components/super-admin/IncreaseStorageModal";
 import { DNSSetupModal } from "../../../components/super-admin/DNSSetupModal";
 import { DomainRowActionMenu } from "../../../components/super-admin/DomainRowActionMenu";
 import { Badge } from "../../../components/ui/Badge";
@@ -18,6 +19,7 @@ export default function DomainsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [assignTarget, setAssignTarget] = useState<Domain | null>(null);
   const [dnsTarget, setDnsTarget] = useState<Domain | null>(null);
+  const [storageTarget, setStorageTarget] = useState<Domain | null>(null);
   /** Portal menu anchored to viewport (avoids clip from scroll containers). */
   const [menu, setMenu] = useState<{ domainId: string; rect: DOMRect } | null>(null);
 
@@ -95,6 +97,7 @@ export default function DomainsPage() {
     menuDomain != null
       ? [
           { label: "Assign Admin", fn: () => setAssignTarget(menuDomain) },
+          { label: "Increase storage", fn: () => setStorageTarget(menuDomain) },
           { label: "DNS Setup", fn: () => setDnsTarget(menuDomain) },
           ...(menuDomain.cloudflare_auto_dns
             ? [{ label: "Push DNS to Cloudflare", fn: () => void handlePushCloudflare(menuDomain) }]
@@ -147,6 +150,7 @@ export default function DomainsPage() {
               <thead className="bg-gray-50 dark:bg-gray-800/50 text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 <tr>
                   <th className="px-4 py-3 text-left">Domain</th>
+                  <th className="px-4 py-3 text-left">Storage</th>
                   <th className="px-4 py-3 text-left">Status</th>
                   <th className="px-4 py-3 text-left">DNS</th>
                   <th className="px-4 py-3 text-left">Admin</th>
@@ -157,6 +161,9 @@ export default function DomainsPage() {
                 {filtered.map((d) => (
                   <tr key={d.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30">
                     <td className="px-4 py-3 font-medium text-gray-900 dark:text-white">{d.name}</td>
+                    <td className="px-4 py-3 text-gray-600 dark:text-gray-400 tabular-nums text-xs">
+                      {(d.used_storage_gb ?? 0).toFixed(1)} / {d.storage_quota_gb ?? 10} GB
+                    </td>
                     <td className="px-4 py-3">
                       {d.is_suspended ? (
                         <Badge variant="danger">Suspended</Badge>
@@ -217,6 +224,13 @@ export default function DomainsPage() {
       )}
       {dnsTarget && (
         <DNSSetupModal domainId={dnsTarget.id} domainName={dnsTarget.name} onClose={() => setDnsTarget(null)} />
+      )}
+      {storageTarget && (
+        <IncreaseStorageModal
+          domain={storageTarget}
+          onClose={() => setStorageTarget(null)}
+          onSaved={load}
+        />
       )}
     </div>
   );

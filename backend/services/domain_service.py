@@ -212,8 +212,13 @@ async def sync_cloudflare_mail_dns(zone_id: str, api_token: str, domain_id: str)
     return {"attempted": True, "ok": all_ok, "message": msg, "steps": steps}
 
 
-async def create_domain(name: str, admin_user_id: str | None = None) -> dict:
+async def create_domain(
+    name: str,
+    admin_user_id: str | None = None,
+    storage_quota_gb: int | None = None,
+) -> dict:
     """Register a new domain and generate its DKIM keypair."""
+    quota = 10 if storage_quota_gb is None else max(1, min(int(storage_quota_gb), 2048))
     async with AsyncSessionLocal() as db:
         existing = await db.scalar(select(Domain.id).where(Domain.name == name.lower()))
         if existing:
@@ -237,6 +242,7 @@ async def create_domain(name: str, admin_user_id: str | None = None) -> dict:
 
         domain = Domain(
             name=name.lower(),
+            storage_quota_gb=quota,
             dkim_private_key_encrypted=encrypt_value(private_pem),
             dkim_selector=settings.dkim_selector,
             spf_record=f"v=spf1 mx a:mail.{name.lower()} ~all",
@@ -285,13 +291,44 @@ async def unsuspend_domain(domain_id: str) -> None:
         await db.commit()
 
 
-async def verify_dns(domain_id: str) -> dict:
-    """Check live DNS records for MX, SPF, DKIM, DMARC."""
+def _txt_rdata_to_unicode(rdata) -> str:
+    """Concatenate TXT character-strings in one RR (RFC 6376: no spaces between chunks)."""
+    strings = getattr(rdata, "strings", None)
+    if not strings:
+        return str(rdata)
+    parts: list[str] = []
+    for s in strings:
+        if isinstance(s, bytes):
+            parts.append(s.decode("utf-8", errors="replace"))
+        else:
+            parts.append(str(s))
+    return "".join(parts)
+
+
+def _public_dns_resolver():
+    """Avoid stale NXDOMAIN/cache from the container default resolver right after DNS updates."""
     import dns.resolver
+
+    res = dns.resolver.Resolver(configure=False)
+    res.nameservers = ["1.1.1.1", "8.8.8.8", "1.0.0.1", "8.8.4.4"]
+    res.timeout = 4
+    res.lifetime = 12
+    return res
+
+
+def _resolve_txt_strings(resolver, host: str) -> list[str]:
+    """One concatenated string per TXT RR at host."""
+    answer = resolver.resolve(host, "TXT")
+    return [_txt_rdata_to_unicode(r) for r in answer]
+
+
+async def verify_dns(domain_id: str) -> dict:
+    """Check live DNS records for MX, SPF, DKIM, DMARC (queries public resolvers)."""
+    res = _public_dns_resolver()
 
     async with AsyncSessionLocal() as db:
         domain: Domain | None = (
-            await db.execute(select(Domain).where(Domain.id == domain_id))
+            await db.execute(select(Domain).where(Domain.id == UUID(str(domain_id))))
         ).scalar_one_or_none()
         if not domain:
             raise ValueError("Domain not found.")
@@ -302,15 +339,15 @@ async def verify_dns(domain_id: str) -> dict:
 
     # MX
     try:
-        mx = dns.resolver.resolve(name, "MX")
+        mx = res.resolve(name, "MX")
         results["mx"] = {"ok": True, "value": str(sorted(mx, key=lambda r: r.preference)[0].exchange)}
     except Exception as exc:
         results["mx"] = {"ok": False, "error": str(exc)}
 
     # SPF
     try:
-        txts = dns.resolver.resolve(name, "TXT")
-        spf = next((str(r) for r in txts if "v=spf1" in str(r)), None)
+        txt_vals = _resolve_txt_strings(res, name)
+        spf = next((t for t in txt_vals if "v=spf1" in t), None)
         results["spf"] = {"ok": bool(spf), "value": spf}
     except Exception as exc:
         results["spf"] = {"ok": False, "error": str(exc)}
@@ -318,16 +355,16 @@ async def verify_dns(domain_id: str) -> dict:
     # DKIM
     try:
         dkim_host = f"{selector}._domainkey.{name}"
-        txts = dns.resolver.resolve(dkim_host, "TXT")
-        dkim_val = " ".join(str(r) for r in txts)
-        results["dkim"] = {"ok": "v=DKIM1" in dkim_val, "value": dkim_val}
+        txt_vals = _resolve_txt_strings(res, dkim_host)
+        dkim_val = next((t for t in txt_vals if "v=DKIM1" in t), (txt_vals[0] if txt_vals else ""))
+        results["dkim"] = {"ok": bool(dkim_val and "v=DKIM1" in dkim_val), "value": dkim_val}
     except Exception as exc:
         results["dkim"] = {"ok": False, "error": str(exc)}
 
     # DMARC
     try:
-        txts = dns.resolver.resolve(f"_dmarc.{name}", "TXT")
-        dmarc = next((str(r) for r in txts if "v=DMARC1" in str(r)), None)
+        txt_vals = _resolve_txt_strings(res, f"_dmarc.{name}")
+        dmarc = next((t for t in txt_vals if "v=DMARC1" in t), None)
         results["dmarc"] = {"ok": bool(dmarc), "value": dmarc}
     except Exception as exc:
         results["dmarc"] = {"ok": False, "error": str(exc)}
@@ -337,11 +374,16 @@ async def verify_dns(domain_id: str) -> dict:
     # Persist verification status
     async with AsyncSessionLocal() as db:
         domain = (
-            await db.execute(select(Domain).where(Domain.id == domain_id))
+            await db.execute(select(Domain).where(Domain.id == UUID(str(domain_id))))
         ).scalar_one_or_none()
         if domain:
             domain.dns_verified = all_ok
             domain.dns_verified_at = datetime.now(tz=timezone.utc) if all_ok else None
             await db.commit()
 
-    return {"domain": name, "all_ok": all_ok, "records": results}
+    return {
+        "domain": name,
+        "dkim_selector": selector,
+        "all_ok": all_ok,
+        "records": results,
+    }

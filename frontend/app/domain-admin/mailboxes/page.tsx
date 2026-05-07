@@ -79,6 +79,7 @@ export default function MailboxesPage() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 dark:bg-gray-800/50 text-xs text-gray-500 dark:text-gray-400 uppercase">
               <tr>
+                <th className="px-4 py-3 text-left">Name</th>
                 <th className="px-4 py-3 text-left">Address</th>
                 <th className="px-4 py-3 text-left">Usage</th>
                 <th className="px-4 py-3 text-left">Status</th>
@@ -88,6 +89,13 @@ export default function MailboxesPage() {
             <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
               {filtered.map((m) => (
                 <tr key={m.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30">
+                  <td className="px-4 py-3 text-gray-800 dark:text-gray-200">
+                    {m.display_name?.trim() ? (
+                      <span className="font-medium">{m.display_name}</span>
+                    ) : (
+                      <span className="text-gray-400 dark:text-gray-500">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 font-medium text-gray-900 dark:text-white">{m.full_address}</td>
                   <td className="px-4 py-3 min-w-32">
                     <ProgressBar value={m.used_mb} max={m.quota_mb} label={`${m.used_mb}/${m.quota_mb} MB`} />
@@ -128,8 +136,18 @@ export default function MailboxesPage() {
       <CreateMailboxModal open={createOpen} onClose={() => setCreateOpen(false)} onCreate={() => load()} />
       <CreateAliasModal open={aliasOpen} onClose={() => setAliasOpen(false)} onCreate={() => load()} />
       {editing && (
-        <EditMailboxModal open mailboxId={editing.id} initialQuotaMb={editing.quota_mb} initialIsActive={editing.is_active}
-          onClose={() => setEditing(null)} onSave={() => { setEditing(null); load(); }} />
+        <EditMailboxModal
+          open
+          mailboxId={editing.id}
+          initialDisplayName={editing.display_name ?? ""}
+          initialQuotaMb={editing.quota_mb}
+          initialIsActive={editing.is_active}
+          onClose={() => setEditing(null)}
+          onSave={() => {
+            setEditing(null);
+            load();
+          }}
+        />
       )}
       {resetTarget && (
         <ResetPasswordModal mailboxId={resetTarget.id} mailboxEmail={resetTarget.full_address} onClose={() => setResetTarget(null)} />
